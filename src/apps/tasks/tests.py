@@ -14,13 +14,11 @@ from apps.tasks.services import (
 
 
 class HealthCheckEndpointTest(TestCase):
-    """Тестирование служебного эндпоинта health-check."""
-
+    """Тестування службового ендпоінта health-check."""
     def setUp(self):
         self.client = APIClient()
 
     def test_health_check_endpoint(self):
-        # Тестируем доступ по прямым и вложенным URL
         for path in ["/health", "/health/", "/api/health", "/api/health/"]:
             with self.subTest(path=path):
                 response = self.client.get(path)
@@ -33,8 +31,6 @@ class HealthCheckEndpointTest(TestCase):
 
 
 class ModelsAndRepositoriesTest(TestCase):
-    """Тестирование моделей и репозиторного слоя."""
-
     def setUp(self):
         self.user_repo = UserRepository()
         self.project_repo = ProjectRepository()
@@ -116,7 +112,6 @@ class ModelsAndRepositoriesTest(TestCase):
 
 
 class ServicesTest(TestCase):
-    """Тестирование сервисного слоя и бизнес-логики."""
 
     def setUp(self):
         self.user = User.objects.create_user(

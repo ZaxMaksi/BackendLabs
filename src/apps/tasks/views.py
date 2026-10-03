@@ -9,7 +9,7 @@ from apps.tasks.services import HealthCheckService
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def health_check(request):
-    """Служебный эндпоинт health-check для мониторинга работоспособности сервиса."""
+    """Службовий енд-поінт health-check для моніторингу працездатності сервіса."""
     try:
         data = HealthCheckService.check_health()
         return Response(data, status=status.HTTP_200_OK)
