@@ -14,7 +14,7 @@ from apps.tasks.services import ValidationError as ServiceValidationError
 
 
 def _format_error_detail(detail: Any) -> tuple[str, Optional[Any]]:
-    """Преобразует детали ошибки DRF в текстовое пояснение detail и структуру invalid_params."""
+    """Перетворює деталі помилки DRF на текстове пояснення detail та структуру invalid_params."""
     if isinstance(detail, str):
         return detail, None
 
@@ -36,21 +36,21 @@ def custom_exception_handler(
     exc: Exception, context: dict[str, Any]
 ) -> Optional[Response]:
     """
-    Кастомный обработчик исключений для стандартизации ответов об ошибках
-    в единый JSON-формат RFC 7807 (Problem Details for HTTP APIs).
+    Кастомний обробник виключень для стандартизації відповідей про помилки
+    в єдиний JSON-формат RFC 7807 (Problem Details for HTTP APIs).
 
-    Поля ответа:
-    - type: URI-идентификатор типа проблемы
-    - title: Краткое описание статуса ошибки
-    - status: Числовой HTTP-код статуса
-    - detail: Подробное сообщение об ошибке
-    - instance: URI запрошенного ресурса
-    - invalid_params: Словарь ошибок валидации полей (при наличии)
+    Поля відповіді:
+    - type: URI-ідентифікатор типу проблеми
+    - title: Короткий опис статусу помилки
+    - status: Числовий HTTP-код статусу
+    - detail: Детальне повідомлення про помилку
+    - instance: URI запитаного ресурсу
+    - invalid_params: Словник помилок валідації полів (за наявності)
     """
     request = context.get("request")
     instance = request.path if request else ""
 
-    # 1. Маппинг специфичных исключений приложения и Django к DRF APIException / статус-кодам
+    # 1. Мапінг специфічних виключень застосунку та Django до DRF APIException / статус-кодів
     status_code: int
     title: str
     detail_msg: str
@@ -120,7 +120,7 @@ def custom_exception_handler(
         detail_msg, invalid_params = _format_error_detail(raw_detail)
 
     else:
-        # Попытка обработать стандартным обработчиком DRF
+        # Спроба обробити стандартним обробником DRF
         response = exception_handler(exc, context)
         if response is not None:
             status_code = response.status_code
@@ -131,7 +131,7 @@ def custom_exception_handler(
             title = "Internal Server Error"
             detail_msg = "An unexpected internal server error occurred."
 
-    # Нормализация слага типа проблемы
+    # Нормалізація слага типу проблеми
     slug = title.lower().replace(" ", "-")
     problem_type = f"urn:problem-type:{slug}"
 

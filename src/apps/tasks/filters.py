@@ -4,7 +4,7 @@ from apps.tasks.models import Project, Task, TaskPriority, TaskStatus
 
 
 class TaskFilter(django_filters.FilterSet):
-    """Фильтр для задач по статусу, приоритету, проекту и исполнителю."""
+    """Фільтр для завдань за статусом, пріоритетом, проєктом та виконавцем."""
 
     status = django_filters.ChoiceFilter(choices=TaskStatus.choices)
     priority = django_filters.ChoiceFilter(choices=TaskPriority.choices)
@@ -26,7 +26,7 @@ class TaskFilter(django_filters.FilterSet):
 
 
 class ProjectFilter(django_filters.FilterSet):
-    """Фильтр для проектов по владельцу и названию."""
+    """Фільтр для проєктів за власником та назвою."""
 
     owner_id = django_filters.NumberFilter(field_name="owner_id")
     owner = django_filters.NumberFilter(field_name="owner_id")

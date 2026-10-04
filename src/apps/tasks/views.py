@@ -14,7 +14,7 @@ from apps.tasks.services import HealthCheckService, ProjectService, TaskService
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def health_check(request):
-    """Служебный эндпоинт health-check для мониторинга работоспособности сервиса и БД."""
+    """Службовий ендпоінт health-check для моніторингу працездатності сервісу та БД."""
     try:
         data = HealthCheckService.check_health()
         return Response(data, status=status.HTTP_200_OK)
@@ -26,7 +26,7 @@ def health_check(request):
 
 
 class ProjectViewSet(viewsets.ModelViewSet):
-    """ViewSet для полного CRUD-управления проектами."""
+    """ViewSet для повного CRUD-управління проєктами."""
 
     serializer_class = ProjectSerializer
     pagination_class = StandardResultsSetPagination
@@ -82,7 +82,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
 
 class TaskViewSet(viewsets.ModelViewSet):
-    """ViewSet для полного CRUD-управления задачами."""
+    """ViewSet для повного CRUD-управління завданнями."""
 
     serializer_class = TaskSerializer
     pagination_class = StandardResultsSetPagination

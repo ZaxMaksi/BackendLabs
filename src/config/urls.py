@@ -7,7 +7,7 @@ from apps.tasks.views import health_check
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    # Служебный эндпоинт health-check (доступен как /health, так и /api/health/)
+    # Службовий ендпоінт health-check (доступний як /health, так і /api/health/)
     path("health/", health_check, name="health-check"),
     path("health", health_check, name="health-check-direct"),
     path("api/health/", health_check, name="api-health-check"),

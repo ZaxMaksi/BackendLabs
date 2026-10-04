@@ -1,10 +1,10 @@
-# Task Tracker API (Система управления задачами)
+# Task Tracker API (Система управління завданнями)
 
-Лабораторный проект по теме 3.2 «Система управления задачами (Трекер задач)» на стеке **Python 3.10+ / Django / Django REST Framework / PostgreSQL**.
+Лабораторний проєкт за темою 3.2 «Система управління завданнями (Трекер завдань)» на стеку **Python 3.10+ / Django / Django REST Framework / PostgreSQL**.
 
-## Архитектура проекта
+## Архітектура проєкту
 
-Проект построен по принципам многослойной архитектуры (Clean Architecture / Layered Monolith) с чётким разделением ответственности:
+Проєкт побудований за принципами багатошарової архітектури (Clean Architecture / Layered Monolith) з чітким розділенням відповідальності:
 
 ```text
 HTTP Request
@@ -13,10 +13,10 @@ HTTP Request
 [ Views / Controllers ]  (src/apps/tasks/views.py)
      │
      ▼
-[ Service Layer ]        (src/apps/tasks/services.py)  ── Бизнес-логика и валидации
+[ Service Layer ]        (src/apps/tasks/services.py)  ── Бізнес-логіка та валідації
      │
      ▼
-[ Repository Layer ]     (src/apps/tasks/repositories.py) ── Изоляция direct ORM-запросов
+[ Repository Layer ]     (src/apps/tasks/repositories.py) ── Ізоляція direct ORM-запитів
      │
      ▼
 [ Models / Django ORM ]  (src/apps/tasks/models.py)
@@ -25,30 +25,30 @@ HTTP Request
 [ PostgreSQL DB ]
 ```
 
-### Реализованные сущности (Этап 1):
-1. **`User`** (`apps.tasks.models.User`): Кастомная модель на основе `AbstractUser` с ролевой моделью (`admin`, `project_manager`, `member`).
-2. **`Project`** (`apps.tasks.models.Project`): Проекты с полями `name`, `description`, `created_at` и привязкой к владельцу `owner`.
-3. **`Task`** (`apps.tasks.models.Task`): Задачи с полями `title`, `description`, `status` (`todo`, `in_progress`, `done`), `priority` (`low`, `medium`, `high`), связями с проектом (`project`) и исполнителем (`assignee`), дедлайном `due_date` и датой создания `created_at`.
+### Реалізовані сутності (Етап 1):
+1. **`User`** (`apps.tasks.models.User`): Кастомна модель на основі `AbstractUser` з рольовою моделлю (`admin`, `project_manager`, `member`).
+2. **`Project`** (`apps.tasks.models.Project`): Проєкти з полями `name`, `description`, `created_at` та прив'язкою до власника `owner`.
+3. **`Task`** (`apps.tasks.models.Task`): Завдання з полями `title`, `description`, `status` (`todo`, `in_progress`, `done`), `priority` (`low`, `medium`, `high`), зв'язками з проєктом (`project`) та виконавцем (`assignee`), дедлайном `due_date` і датою створення `created_at`.
 
 ---
 
-## Требования
+## Вимоги
 
 * Python 3.10+
 * PostgreSQL 14+
-* Виртуальное окружение (`venv`)
+* Віртуальне оточення (`venv`)
 
 ---
 
-## Установка и запуск
+## Встановлення та запуск
 
-### 1. Клонирование репозитория и переход в проект
+### 1. Клонування репозиторію та перехід у проєкт
 ```bash
-git clone <url_репозитория>
+git clone <url_репозиторію>
 cd task_tracker_project
 ```
 
-### 2. Создание и активация виртуального окружения
+### 2. Створення та активація віртуального оточення
 ```bash
 python -m venv .venv
 
@@ -59,13 +59,13 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
-### 3. Установка зависимостей
+### 3. Встановлення залежностей
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Настройка переменных окружения
-Создайте файл `.env` в корне проекта (по шаблону):
+### 4. Налаштування змінних оточення
+Створіть файл `.env` у корені проєкту (за шаблоном):
 ```env
 SECRET_KEY=your-secret-key-here
 DEBUG=True
@@ -78,82 +78,80 @@ DB_HOST=localhost
 DB_PORT=5432
 ```
 
-### 5. Применение миграций к PostgreSQL
+### 5. Застосування міграцій до PostgreSQL
 ```bash
 python manage.py migrate
 ```
 
-### 6. Запуск тестов
+### 6. Запуск тестів
 ```bash
 python manage.py test apps.tasks
 ```
 
-### 7. Запуск сервера разработки
+### 7. Запуск сервера розробки
 ```bash
 python manage.py runserver
 ```
 
 ---
 
----
+## Ендпоінти API (Етапи 1 і 2)
 
-## Эндпоинты API (Этапы 1 и 2)
+### 1. Сервісні ендпоінти
+| Метод | URL | Опис | Очікувана відповідь |
+|-------|-----|------|---------------------|
+| `GET` | `/health` або `/health/` | Health-check сервісу та БД | `{"status": "ok"}` (200 OK) |
+| `GET` | `/api/health/` | API-версія Health-check | `{"status": "ok"}` (200 OK) |
+| `GET` | `/admin/` | Панель адміністратора Django | Django Admin |
 
-### 1. Сервисные эндпоинты
-| Метод | URL | Описание | Ожидаемый ответ |
-|-------|-----|----------|-----------------|
-| `GET` | `/health` или `/health/` | Health-check сервиса и БД | `{"status": "ok"}` (200 OK) |
-| `GET` | `/api/health/` | API-версия Health-check | `{"status": "ok"}` (200 OK) |
-| `GET` | `/admin/` | Панель администратора Django | Django Admin |
+### 2. Проєкти (`/api/projects/`)
+| Метод | URL | Опис | Статус-код |
+|-------|-----|------|------------|
+| `GET` | `/api/projects/` | Список проєктів (пагінація, сортування, фільтрація) | 200 OK |
+| `POST` | `/api/projects/` | Створення нового проєкту | 201 Created |
+| `GET` | `/api/projects/{id}/` | Детальна інформація про проєкт із вкладеними завданнями та власником | 200 OK |
+| `PUT` | `/api/projects/{id}/` | Повне оновлення проєкту | 200 OK |
+| `PATCH` | `/api/projects/{id}/` | Часткове оновлення проєкту | 200 OK |
+| `DELETE` | `/api/projects/{id}/` | Видалення проєкту | 204 No Content |
 
-### 2. Проекты (`/api/projects/`)
-| Метод | URL | Описание | Статус-код |
-|-------|-----|----------|------------|
-| `GET` | `/api/projects/` | Список проектов (пагинация, сортировка, фильтрация) | 200 OK |
-| `POST` | `/api/projects/` | Создание нового проекта | 201 Created |
-| `GET` | `/api/projects/{id}/` | Детальная информация о проекте с вложенными задачами и владельцем | 200 OK |
-| `PUT` | `/api/projects/{id}/` | Полное обновление проекта | 200 OK |
-| `PATCH` | `/api/projects/{id}/` | Частичное обновление проекта | 200 OK |
-| `DELETE` | `/api/projects/{id}/` | Удаление проекта | 204 No Content |
+**Query-параметри для `/api/projects/`:**
+* `?page=1&page_size=10` — пагінація (`PageNumberPagination`)
+* `?owner_id=1` (або `?owner=1`) — фільтрація за власником проєкту
+* `?name=Alpha` — пошук/фільтрація за назвою
+* `?ordering=-created_at` — сортування (`created_at`, `-created_at`, `name`, `-name`)
 
-**Query-параметры для `/api/projects/`:**
-* `?page=1&page_size=10` — пагинация (`PageNumberPagination`)
-* `?owner_id=1` — фильтрация по владельцу проекта
-* `?name=Alpha` — поиск/фильтрация по названию
-* `?ordering=-created_at` — сортировка (`created_at`, `-created_at`, `name`, `-name`)
+### 3. Завдання (`/api/tasks/`)
+| Метод | URL | Опис | Статус-код |
+|-------|-----|------|------------|
+| `GET` | `/api/tasks/` | Список завдань (пагінація, фільтрація, сортування) | 200 OK |
+| `POST` | `/api/tasks/` | Створення нового завдання | 201 Created |
+| `GET` | `/api/tasks/{id}/` | Детальна інформація про завдання із вкладеними `project` та `assignee` | 200 OK |
+| `PUT` | `/api/tasks/{id}/` | Повне оновлення завдання | 200 OK |
+| `PATCH` | `/api/tasks/{id}/` | Часткове оновлення завдання | 200 OK |
+| `DELETE` | `/api/tasks/{id}/` | Видалення завдання | 204 No Content |
 
-### 3. Задачи (`/api/tasks/`)
-| Метод | URL | Описание | Статус-код |
-|-------|-----|----------|------------|
-| `GET` | `/api/tasks/` | Список задач (пагинация, фильтрация, сортировка) | 200 OK |
-| `POST` | `/api/tasks/` | Создание новой задачи | 201 Created |
-| `GET` | `/api/tasks/{id}/` | Детальная информация о задаче с вложенными `project` и `assignee` | 200 OK |
-| `PUT` | `/api/tasks/{id}/` | Полное обновление задачи | 200 OK |
-| `PATCH` | `/api/tasks/{id}/` | Частичное обновление задачи | 200 OK |
-| `DELETE` | `/api/tasks/{id}/` | Удаление задачи | 204 No Content |
-
-**Query-параметры для `/api/tasks/`:**
-* `?page=1&page_size=10` — пагинация (`PageNumberPagination`)
-* `?status=todo` — фильтрация по статусу (`todo`, `in_progress`, `done`)
-* `?priority=high` — фильтрация по приоритету (`low`, `medium`, `high`)
-* `?project_id=1` (или `?project=1`) — фильтрация по проекту
-* `?assignee_id=2` (или `?assignee=2`) — фильтрация по исполнителю
-* `?ordering=-created_at` — сортировка (`created_at`, `due_date`, `priority`, `title`)
+**Query-параметри для `/api/tasks/`:**
+* `?page=1&page_size=10` — пагінація (`PageNumberPagination`)
+* `?status=todo` — фільтрація за статусом (`todo`, `in_progress`, `done`)
+* `?priority=high` — фільтрація за пріоритетом (`low`, `medium`, `high`)
+* `?project_id=1` (або `?project=1`) — фільтрація за проєктом
+* `?assignee_id=2` (або `?assignee=2`) — фільтрація за виконавцем
+* `?ordering=-created_at` — сортування (`created_at`, `due_date`, `priority`, `title`)
 
 ---
 
-## Оптимизация запросов (Устранение проблемы N+1)
+## Оптимізація запитів (Усунення проблеми N+1)
 
-В слоях репозиториев (`repositories.py`) и сервисов (`services.py`) реализована предварительная загрузка связанных данных:
-* Для сущности `Task`: используется `select_related("project", "project__owner", "assignee")`. Вся выборка списка задач со всеми связями выполняется за **1 SQL-запрос** (вместо $1 + 3N$).
-* Для сущности `Project`: используется `select_related("owner")` и `prefetch_related("tasks__assignee", "tasks")`. Выборка проектов со всеми вложенными задачами и пользователями выполняется за **2 SQL-запроса** (вместо $1 + N + M$).
-* Оптимизация валидирована интеграционными тестами с `assertNumQueries`.
+У шарах репозиторіїв (`repositories.py`) та сервісів (`services.py`) реалізовано попереднє завантаження пов'язаних даних:
+* Для сутності `Task`: використовується `select_related("project", "project__owner", "assignee")`. Вся вибірка списку завдань з усіма зв'язками виконується за **1 SQL-запит** (замість $1 + 3N$).
+* Для сутності `Project`: використовується `select_related("owner")` та `prefetch_related("tasks__assignee", "tasks")`. Вибірка проєктів з усіма вкладеними завданнями та користувачами виконується за **2 SQL-запити** (замість $1 + N + M$).
+* Оптимізація валідована інтеграційними тестами з `assertNumQueries`.
 
 ---
 
-## Формат ошибок (RFC 7807 Problem Details)
+## Формат помилок (RFC 7807 Problem Details)
 
-Все ошибки API стандартизированы кастомным обработчиком `custom_exception_handler` (`apps.tasks.exceptions.custom_exception_handler`) в единый формат RFC 7807:
+Усі помилки API стандартизовані кастомним обробником `custom_exception_handler` (`apps.tasks.exceptions.custom_exception_handler`) в єдиний формат RFC 7807:
 
 ```json
 {
@@ -170,26 +168,26 @@ python manage.py runserver
 }
 ```
 
-Поддерживаемые статус-коды:
-* `200 OK` — успешный запрос (GET, PUT, PATCH)
-* `201 Created` — успешное создание ресурса (POST)
-* `204 No Content` — успешное удаление ресурса (DELETE)
-* `400 Bad Request` — синтаксические ошибки или некорректный формат запроса
-* `404 Not Found` — запрашиваемый ресурс не найден
-* `422 Unprocessable Entity` — семантические ошибки валидации полей и бизнес-правил
+Підтримувані статус-коди:
+* `200 OK` — успішний запит (GET, PUT, PATCH)
+* `201 Created` — успішне створення ресурсу (POST)
+* `204 No Content` — успішне видалення ресурсу (DELETE)
+* `400 Bad Request` — синтаксичні помилки або некоректний формат запиту
+* `404 Not Found` — запитаний ресурс не знайдено
+* `422 Unprocessable Entity` — семантичні помилки валідації полів та бізнес-правил
 
 ---
 
-## Линтинг и форматирование кода
+## Лінтинг та форматування коду
 
-Для поддержания чистоты кода настроены конфигурации в `pyproject.toml` и `.flake8`.
+Для підтримки чистоти коду налаштовано конфігурації у `pyproject.toml` та `.flake8`.
 
-Проверка линтером:
+Перевірка лінтером:
 ```bash
 ruff check .
 ```
 
-Автоматическое форматирование:
+Автоматичне форматування:
 ```bash
 ruff format .
 ```

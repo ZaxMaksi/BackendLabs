@@ -6,7 +6,7 @@ from apps.tasks.models import Project, Task, TaskPriority, TaskStatus, User, Use
 
 
 class UserRepository:
-    """Репозиторий для изоляции ORM-запросов к сущности User."""
+    """Репозиторій для ізоляції ORM-запитів до сутності User."""
 
     def get_all(self) -> QuerySet[User]:
         return User.objects.all()
@@ -35,7 +35,7 @@ class UserRepository:
 
 
 class ProjectRepository:
-    """Репозиторий для изоляции direct ORM-запросов к сущности Project с оптимизацией N+1."""
+    """Репозиторій для ізоляції direct ORM-запитів до сутності Project з оптимізацією N+1."""
 
     def get_all(self) -> QuerySet[Project]:
         return (
@@ -84,7 +84,7 @@ class ProjectRepository:
 
 
 class TaskRepository:
-    """Репозиторий для изоляции direct ORM-запросов к сущности Task с оптимизацией N+1."""
+    """Репозиторій для ізоляції direct ORM-запитів до сутності Task з оптимізацією N+1."""
 
     def get_all(self) -> QuerySet[Task]:
         return Task.objects.select_related(

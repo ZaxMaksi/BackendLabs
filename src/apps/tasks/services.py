@@ -9,31 +9,31 @@ from apps.tasks.repositories import ProjectRepository, TaskRepository
 
 
 class ServiceError(Exception):
-    """Базовое исключение для сервисного слоя."""
+    """Базове виключення для сервісного шару."""
 
     pass
 
 
 class EntityNotFoundError(ServiceError):
-    """Исключение, выбрасываемое когда сущность не найдена."""
+    """Виключення, що викидається, коли сутність не знайдена."""
 
     pass
 
 
 class ValidationError(ServiceError):
-    """Исключение, выбрасываемое при ошибке валидации бизнес-логики."""
+    """Виключення, що викидається при помилці валідації бізнес-логіки."""
 
     pass
 
 
 class BadRequestError(ServiceError):
-    """Исключение, выбрасываемое при некорректном синтаксисе или параметрах запроса."""
+    """Виключення, що викидається при некоректному синтаксисі або параметрах запиту."""
 
     pass
 
 
 class ProjectService:
-    """Сервисный слой для бизнес-логики проектов."""
+    """Сервісний шар для бізнес-логіки проєктів."""
 
     def __init__(self, repository: Optional[ProjectRepository] = None):
         self.repository = repository or ProjectRepository()
@@ -77,7 +77,7 @@ class ProjectService:
 
 
 class TaskService:
-    """Сервисный слой для бизнес-логики задач."""
+    """Сервісний шар для бізнес-логіки завдань."""
 
     def __init__(
         self,
@@ -216,7 +216,7 @@ class TaskService:
 
 
 class HealthCheckService:
-    """Сервисный слой для проверки работоспособности сервиса и БД."""
+    """Сервісний шар для перевірки працездатності сервісу та БД."""
 
     @staticmethod
     def check_health() -> dict[str, str]:

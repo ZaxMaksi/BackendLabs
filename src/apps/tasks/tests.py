@@ -17,7 +17,7 @@ from apps.tasks.services import (
 
 
 class HealthCheckEndpointTest(TestCase):
-    """Тестирование служебного эндпоинта health-check."""
+    """Тестування службового ендпоінта health-check."""
 
     def setUp(self):
         self.client = APIClient()
@@ -126,48 +126,48 @@ class ServicesTest(TestCase):
         self.task_service = TaskService()
 
     def test_project_service_validation_and_creation(self):
-        # Валидация пустого названия
+        # Валідація порожньої назви
         with self.assertRaises(ValidationError):
             self.project_service.create_project(name="  ", owner=self.user)
 
-        # Успешное создание
+        # Успішне створення
         project = self.project_service.create_project(
             name="Service Project", owner=self.user, description="Description"
         )
         self.assertEqual(project.name, "Service Project")
 
-        # Получение
+        # Отримання
         retrieved = self.project_service.get_project(project.id)
         self.assertEqual(retrieved.id, project.id)
 
-        # Несуществующий проект
+        # Неіснуючий проєкт
         with self.assertRaises(EntityNotFoundError):
             self.project_service.get_project(999999)
 
     def test_task_service_validation_and_lifecycle(self):
         project = self.project_service.create_project(name="Proj", owner=self.user)
 
-        # Ошибка при пустом заголовке
+        # Помилка при порожньому заголовку
         with self.assertRaises(ValidationError):
             self.task_service.create_task(title="", project_id=project.id)
 
-        # Ошибка при несуществующем проекте
+        # Помилка при неіснуючому проєкті
         with self.assertRaises(EntityNotFoundError):
             self.task_service.create_task(title="Task 1", project_id=999999)
 
-        # Ошибка при некорректном статусе
+        # Помилка при некоректному статусі
         with self.assertRaises(ValidationError):
             self.task_service.create_task(
                 title="Task 1", project_id=project.id, status="invalid_status"
             )
 
-        # Ошибка при некорректном приоритете
+        # Помилка при некоректному пріоритеті
         with self.assertRaises(ValidationError):
             self.task_service.create_task(
                 title="Task 1", project_id=project.id, priority="ultra_high"
             )
 
-        # Ошибка при дате в прошлом
+        # Помилка при даті в минулому
         with self.assertRaises(ValidationError):
             self.task_service.create_task(
                 title="Task Past",
@@ -175,7 +175,7 @@ class ServicesTest(TestCase):
                 due_date=timezone.now() - timedelta(days=1),
             )
 
-        # Успешное создание
+        # Успішне створення
         task = self.task_service.create_task(
             title="Clean Architecture",
             project_id=project.id,
@@ -185,17 +185,17 @@ class ServicesTest(TestCase):
         )
         self.assertEqual(task.title, "Clean Architecture")
 
-        # Смена статуса
+        # Зміна статусу
         updated_task = self.task_service.change_task_status(task.id, TaskStatus.DONE)
         self.assertEqual(updated_task.status, TaskStatus.DONE)
 
-        # Назначение исполнителя
+        # Призначення виконавця
         assigned_task = self.task_service.assign_task(task.id, None)
         self.assertIsNone(assigned_task.assignee)
 
 
 class ProjectAPITestCase(TestCase):
-    """Интеграционные тесты CRUD для эндпоинта /api/projects/."""
+    """Інтеграційні тести CRUD для ендпоінта /api/projects/."""
 
     def setUp(self):
         self.client = APIClient()
@@ -262,7 +262,7 @@ class ProjectAPITestCase(TestCase):
 
 
 class TaskAPITestCase(TestCase):
-    """Интеграционные тесты CRUD и связей для эндпоинта /api/tasks/."""
+    """Інтеграційні тести CRUD та зв'язків для ендпоінта /api/tasks/."""
 
     def setUp(self):
         self.client = APIClient()
@@ -298,13 +298,13 @@ class TaskAPITestCase(TestCase):
         self.assertEqual(data["status"], "todo")
         self.assertEqual(data["priority"], "high")
 
-        # Проверка связей и вложенных данных (One-to-Many)
+        # Перевірка зв'язків та вкладених даних (One-to-Many)
         self.assertEqual(data["project"]["id"], self.project.id)
         self.assertEqual(data["project"]["name"], "Alpha Project")
         self.assertEqual(data["assignee"]["id"], self.user.id)
         self.assertEqual(data["assignee"]["username"], "task_assignee")
 
-        # Проверка вложенных tasks при запросе проекта
+        # Перевірка вкладених tasks при запиті проєкту
         res_project = self.client.get(f"/api/projects/{self.project.id}/")
         self.assertEqual(res_project.status_code, status.HTTP_200_OK)
         project_tasks = res_project.json()["tasks"]
@@ -355,7 +355,7 @@ class TaskAPITestCase(TestCase):
 
 
 class QueryOptimizationNPlusOneTest(TestCase):
-    """Тестирование устранения проблемы N+1 с помощью select_related и prefetch_related."""
+    """Тестування усунення проблеми N+1 за допомогою select_related та prefetch_related."""
 
     def setUp(self):
         self.client = APIClient()
@@ -369,7 +369,7 @@ class QueryOptimizationNPlusOneTest(TestCase):
             username="worker2", email="worker2@test.com"
         )
 
-        # Создаем 3 проекта и по 4 задачи в каждом
+        # Створюємо 3 проєкти та по 4 завдання у кожному
         for p_idx in range(3):
             proj = Project.objects.create(name=f"Project {p_idx}", owner=self.owner)
             for t_idx in range(4):
@@ -384,8 +384,8 @@ class QueryOptimizationNPlusOneTest(TestCase):
 
     def test_repository_tasks_no_n_plus_one(self):
         task_repo = TaskRepository()
-        # При выборке всех задач и обращении к task.project, task.project.owner, task.assignee
-        # должен выполняться ровно 1 SQL запрос благодаря select_related
+        # При вибірці всіх завдань та зверненні до task.project, task.project.owner, task.assignee
+        # має виконуватися рівно 1 SQL-запит завдяки select_related
         with self.assertNumQueries(1):
             tasks = list(task_repo.get_all())
             self.assertEqual(len(tasks), 12)
@@ -396,7 +396,7 @@ class QueryOptimizationNPlusOneTest(TestCase):
 
     def test_repository_projects_no_n_plus_one(self):
         project_repo = ProjectRepository()
-        # 1 запрос для projects с owner + 1 запрос для prefetch_related tasks с assignee
+        # 1 запит для projects з owner + 1 запит для prefetch_related tasks з assignee
         with self.assertNumQueries(2):
             projects = list(project_repo.get_all())
             self.assertEqual(len(projects), 3)
@@ -407,14 +407,14 @@ class QueryOptimizationNPlusOneTest(TestCase):
                     _ = task.assignee.username
 
     def test_tasks_list_endpoint_queries(self):
-        # 1 запрос COUNT (пагинация) + 1 запрос с JOIN-ами (select_related) = 2 запроса
+        # 1 запит COUNT (пагінація) + 1 запит із JOIN-ами (select_related) = 2 запити
         with self.assertNumQueries(2):
             response = self.client.get("/api/tasks/")
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             self.assertEqual(response.json()["count"], 12)
 
     def test_projects_list_endpoint_queries(self):
-        # 1 запрос COUNT (пагинация) + 1 запрос projects + 1 запрос prefetch tasks = 3 запроса
+        # 1 запит COUNT (пагінація) + 1 запит projects + 1 запит prefetch tasks = 3 запити
         with self.assertNumQueries(3):
             response = self.client.get("/api/projects/")
             self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -422,7 +422,7 @@ class QueryOptimizationNPlusOneTest(TestCase):
 
 
 class PaginationFilteringSortingTest(TestCase):
-    """Тестирование пагинации (?page=), фильтрации (?status=) и сортировки (?ordering=)."""
+    """Тестування пагінації (?page=), фільтрації (?status=) та сортування (?ordering=)."""
 
     def setUp(self):
         self.client = APIClient()
@@ -466,7 +466,7 @@ class PaginationFilteringSortingTest(TestCase):
         self.assertIsNotNone(data["next"])
         self.assertIsNone(data["previous"])
 
-        # Вторая страница
+        # Друга сторінка
         response_page2 = self.client.get("/api/tasks/?page=2&page_size=2")
         self.assertEqual(response_page2.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response_page2.json()["results"]), 1)
@@ -500,13 +500,13 @@ class PaginationFilteringSortingTest(TestCase):
         self.assertEqual(results[0]["id"], self.task2.id)
 
     def test_sorting(self):
-        # Сортировка по возрастанию due_date (task1 < task3 < task2)
+        # Сортування за зростанням due_date (task1 < task3 < task2)
         response = self.client.get("/api/tasks/?ordering=due_date")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         ids = [item["id"] for item in response.json()["results"]]
         self.assertEqual(ids, [self.task1.id, self.task3.id, self.task2.id])
 
-        # Сортировка по убыванию due_date
+        # Сортування за спаданням due_date
         response_desc = self.client.get("/api/tasks/?ordering=-due_date")
         self.assertEqual(response_desc.status_code, status.HTTP_200_OK)
         ids_desc = [item["id"] for item in response_desc.json()["results"]]
@@ -514,7 +514,7 @@ class PaginationFilteringSortingTest(TestCase):
 
 
 class ValidationAndRFC7807ErrorTest(TestCase):
-    """Тестирование валидации данных и формата ответов об ошибках RFC 7807."""
+    """Тестування валідації даних та формату відповідей про помилки RFC 7807."""
 
     def setUp(self):
         self.client = APIClient()
@@ -582,7 +582,7 @@ class ValidationAndRFC7807ErrorTest(TestCase):
         self.assertIn("detail", data)
 
     def test_method_not_allowed_rfc_7807(self):
-        # GET на /health разрешен, POST не разрешен
+        # GET на /health дозволено, POST не дозволено
         response = self.client.post("/api/health/")
         self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
         data = response.json()

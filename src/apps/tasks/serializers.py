@@ -5,7 +5,7 @@ from apps.tasks.models import Project, Task, TaskPriority, TaskStatus, User
 
 
 class UserSerializer(serializers.ModelSerializer):
-    """Сериализатор для модели User."""
+    """Серіалізатор для моделі User."""
 
     class Meta:
         model = User
@@ -14,7 +14,7 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class ProjectShortSerializer(serializers.ModelSerializer):
-    """Краткое представление проекта для вложенного отображения."""
+    """Коротке представлення проєкту для вкладеного відображення."""
 
     class Meta:
         model = Project
@@ -23,7 +23,7 @@ class ProjectShortSerializer(serializers.ModelSerializer):
 
 
 class TaskInProjectSerializer(serializers.ModelSerializer):
-    """Вложенное представление задачи внутри проекта."""
+    """Вкладене представлення завдання всередині проєкту."""
 
     assignee = UserSerializer(read_only=True)
 
@@ -43,7 +43,7 @@ class TaskInProjectSerializer(serializers.ModelSerializer):
 
 
 class ProjectSerializer(serializers.ModelSerializer):
-    """Сериализатор для модели Project с поддержкой CRUD и связей One-to-Many."""
+    """Серіалізатор для моделі Project з підтримкою CRUD та зв'язків One-to-Many."""
 
     owner = UserSerializer(read_only=True)
     owner_id = serializers.PrimaryKeyRelatedField(
@@ -68,7 +68,7 @@ class ProjectSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "owner", "tasks"]
 
     def to_internal_value(self, data):
-        # Поддержка передачи идентификатора владельца как через owner_id, так и через owner
+        # Підтримка передачі ідентифікатора власника як через owner_id, так і через owner
         if isinstance(data, dict):
             data = data.copy()
             if (
@@ -101,7 +101,7 @@ class ProjectSerializer(serializers.ModelSerializer):
 
 
 class TaskSerializer(serializers.ModelSerializer):
-    """Сериализатор для модели Task с валидацией полей, дат и связей."""
+    """Серіалізатор для моделі Task з валідацією полів, дат та зв'язків."""
 
     project = ProjectShortSerializer(read_only=True)
     project_id = serializers.PrimaryKeyRelatedField(
@@ -137,7 +137,7 @@ class TaskSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "project", "assignee"]
 
     def to_internal_value(self, data):
-        # Поддержка передачи id проекта и исполнителя как 'project' / 'assignee'
+        # Підтримка передачі id проєкту та виконавця як 'project' / 'assignee'
         if isinstance(data, dict):
             data = data.copy()
             if (
