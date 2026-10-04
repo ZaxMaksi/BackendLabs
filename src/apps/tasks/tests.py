@@ -1,8 +1,11 @@
+from datetime import timedelta
+
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from apps.tasks.models import TaskPriority, TaskStatus, User, UserRole
+from apps.tasks.models import Project, Task, TaskPriority, TaskStatus, User, UserRole
 from apps.tasks.repositories import ProjectRepository, TaskRepository, UserRepository
 from apps.tasks.services import (
     EntityNotFoundError,
@@ -14,7 +17,8 @@ from apps.tasks.services import (
 
 
 class HealthCheckEndpointTest(TestCase):
-    """Тестування службового ендпоінта health-check."""
+    """Тестирование служебного эндпоинта health-check."""
+
     def setUp(self):
         self.client = APIClient()
 
@@ -112,7 +116,6 @@ class ModelsAndRepositoriesTest(TestCase):
 
 
 class ServicesTest(TestCase):
-
     def setUp(self):
         self.user = User.objects.create_user(
             username="serviceuser",
@@ -164,6 +167,14 @@ class ServicesTest(TestCase):
                 title="Task 1", project_id=project.id, priority="ultra_high"
             )
 
+        # Ошибка при дате в прошлом
+        with self.assertRaises(ValidationError):
+            self.task_service.create_task(
+                title="Task Past",
+                project_id=project.id,
+                due_date=timezone.now() - timedelta(days=1),
+            )
+
         # Успешное создание
         task = self.task_service.create_task(
             title="Clean Architecture",
@@ -181,3 +192,400 @@ class ServicesTest(TestCase):
         # Назначение исполнителя
         assigned_task = self.task_service.assign_task(task.id, None)
         self.assertIsNone(assigned_task.assignee)
+
+
+class ProjectAPITestCase(TestCase):
+    """Интеграционные тесты CRUD для эндпоинта /api/projects/."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="project_owner",
+            email="owner@example.com",
+            role=UserRole.PROJECT_MANAGER,
+        )
+
+    def test_project_crud_lifecycle(self):
+        # 1. CREATE (POST /api/projects/)
+        create_payload = {
+            "name": "E-Commerce System",
+            "description": "Online shop backend",
+            "owner": self.user.id,
+        }
+        res_create = self.client.post("/api/projects/", create_payload, format="json")
+        self.assertEqual(res_create.status_code, status.HTTP_201_CREATED)
+        project_id = res_create.json()["id"]
+        self.assertEqual(res_create.json()["name"], "E-Commerce System")
+        self.assertEqual(res_create.json()["owner"]["id"], self.user.id)
+        self.assertEqual(res_create.json()["tasks"], [])
+
+        # 2. LIST (GET /api/projects/)
+        res_list = self.client.get("/api/projects/")
+        self.assertEqual(res_list.status_code, status.HTTP_200_OK)
+        self.assertIn("results", res_list.json())
+        self.assertEqual(res_list.json()["count"], 1)
+
+        # 3. RETRIEVE (GET /api/projects/{id}/)
+        res_get = self.client.get(f"/api/projects/{project_id}/")
+        self.assertEqual(res_get.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_get.json()["id"], project_id)
+        self.assertEqual(res_get.json()["owner"]["username"], "project_owner")
+
+        # 4. UPDATE (PUT /api/projects/{id}/)
+        put_payload = {
+            "name": "E-Commerce Platform",
+            "description": "Updated shop description",
+            "owner": self.user.id,
+        }
+        res_put = self.client.put(
+            f"/api/projects/{project_id}/", put_payload, format="json"
+        )
+        self.assertEqual(res_put.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_put.json()["name"], "E-Commerce Platform")
+
+        # 5. PARTIAL UPDATE (PATCH /api/projects/{id}/)
+        patch_payload = {"name": "E-Commerce Final"}
+        res_patch = self.client.patch(
+            f"/api/projects/{project_id}/", patch_payload, format="json"
+        )
+        self.assertEqual(res_patch.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_patch.json()["name"], "E-Commerce Final")
+
+        # 6. DELETE (DELETE /api/projects/{id}/)
+        res_delete = self.client.delete(f"/api/projects/{project_id}/")
+        self.assertEqual(res_delete.status_code, status.HTTP_204_NO_CONTENT)
+
+        # 7. VERIFY NOT FOUND
+        res_deleted = self.client.get(f"/api/projects/{project_id}/")
+        self.assertEqual(res_deleted.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(res_deleted.json()["title"], "Not Found")
+
+
+class TaskAPITestCase(TestCase):
+    """Интеграционные тесты CRUD и связей для эндпоинта /api/tasks/."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="task_assignee",
+            email="assignee@example.com",
+            role=UserRole.MEMBER,
+        )
+        self.project = Project.objects.create(
+            name="Alpha Project",
+            owner=self.user,
+            description="Alpha description",
+        )
+
+    def test_task_crud_and_nested_relations(self):
+        due_future = timezone.now() + timedelta(days=5)
+
+        # 1. CREATE (POST /api/tasks/)
+        create_payload = {
+            "title": "Design REST API",
+            "description": "Implement CRUD and RFC 7807",
+            "status": "todo",
+            "priority": "high",
+            "project": self.project.id,
+            "assignee": self.user.id,
+            "due_date": due_future.isoformat(),
+        }
+        res_create = self.client.post("/api/tasks/", create_payload, format="json")
+        self.assertEqual(res_create.status_code, status.HTTP_201_CREATED)
+        data = res_create.json()
+        task_id = data["id"]
+        self.assertEqual(data["title"], "Design REST API")
+        self.assertEqual(data["status"], "todo")
+        self.assertEqual(data["priority"], "high")
+
+        # Проверка связей и вложенных данных (One-to-Many)
+        self.assertEqual(data["project"]["id"], self.project.id)
+        self.assertEqual(data["project"]["name"], "Alpha Project")
+        self.assertEqual(data["assignee"]["id"], self.user.id)
+        self.assertEqual(data["assignee"]["username"], "task_assignee")
+
+        # Проверка вложенных tasks при запросе проекта
+        res_project = self.client.get(f"/api/projects/{self.project.id}/")
+        self.assertEqual(res_project.status_code, status.HTTP_200_OK)
+        project_tasks = res_project.json()["tasks"]
+        self.assertEqual(len(project_tasks), 1)
+        self.assertEqual(project_tasks[0]["id"], task_id)
+        self.assertEqual(project_tasks[0]["title"], "Design REST API")
+
+        # 2. LIST (GET /api/tasks/)
+        res_list = self.client.get("/api/tasks/")
+        self.assertEqual(res_list.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_list.json()["count"], 1)
+
+        # 3. RETRIEVE (GET /api/tasks/{id}/)
+        res_get = self.client.get(f"/api/tasks/{task_id}/")
+        self.assertEqual(res_get.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_get.json()["id"], task_id)
+
+        # 4. UPDATE (PUT /api/tasks/{id}/)
+        put_payload = {
+            "title": "Design and Review REST API",
+            "description": "Updated description",
+            "status": "in_progress",
+            "priority": "medium",
+            "project": self.project.id,
+            "assignee": self.user.id,
+            "due_date": (timezone.now() + timedelta(days=7)).isoformat(),
+        }
+        res_put = self.client.put(f"/api/tasks/{task_id}/", put_payload, format="json")
+        self.assertEqual(res_put.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_put.json()["title"], "Design and Review REST API")
+        self.assertEqual(res_put.json()["status"], "in_progress")
+
+        # 5. PARTIAL UPDATE (PATCH /api/tasks/{id}/)
+        patch_payload = {"status": "done"}
+        res_patch = self.client.patch(
+            f"/api/tasks/{task_id}/", patch_payload, format="json"
+        )
+        self.assertEqual(res_patch.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_patch.json()["status"], "done")
+
+        # 6. DELETE (DELETE /api/tasks/{id}/)
+        res_delete = self.client.delete(f"/api/tasks/{task_id}/")
+        self.assertEqual(res_delete.status_code, status.HTTP_204_NO_CONTENT)
+
+        # 7. VERIFY NOT FOUND
+        res_deleted = self.client.get(f"/api/tasks/{task_id}/")
+        self.assertEqual(res_deleted.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class QueryOptimizationNPlusOneTest(TestCase):
+    """Тестирование устранения проблемы N+1 с помощью select_related и prefetch_related."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.owner = User.objects.create_user(
+            username="owner_user", email="owner@test.com"
+        )
+        self.assignee1 = User.objects.create_user(
+            username="worker1", email="worker1@test.com"
+        )
+        self.assignee2 = User.objects.create_user(
+            username="worker2", email="worker2@test.com"
+        )
+
+        # Создаем 3 проекта и по 4 задачи в каждом
+        for p_idx in range(3):
+            proj = Project.objects.create(name=f"Project {p_idx}", owner=self.owner)
+            for t_idx in range(4):
+                assignee = self.assignee1 if t_idx % 2 == 0 else self.assignee2
+                Task.objects.create(
+                    title=f"Task {p_idx}_{t_idx}",
+                    project=proj,
+                    assignee=assignee,
+                    status=TaskStatus.TODO,
+                    priority=TaskPriority.MEDIUM,
+                )
+
+    def test_repository_tasks_no_n_plus_one(self):
+        task_repo = TaskRepository()
+        # При выборке всех задач и обращении к task.project, task.project.owner, task.assignee
+        # должен выполняться ровно 1 SQL запрос благодаря select_related
+        with self.assertNumQueries(1):
+            tasks = list(task_repo.get_all())
+            self.assertEqual(len(tasks), 12)
+            for task in tasks:
+                _ = task.project.name
+                _ = task.project.owner.username
+                _ = task.assignee.username
+
+    def test_repository_projects_no_n_plus_one(self):
+        project_repo = ProjectRepository()
+        # 1 запрос для projects с owner + 1 запрос для prefetch_related tasks с assignee
+        with self.assertNumQueries(2):
+            projects = list(project_repo.get_all())
+            self.assertEqual(len(projects), 3)
+            for project in projects:
+                _ = project.owner.username
+                for task in project.tasks.all():
+                    _ = task.title
+                    _ = task.assignee.username
+
+    def test_tasks_list_endpoint_queries(self):
+        # 1 запрос COUNT (пагинация) + 1 запрос с JOIN-ами (select_related) = 2 запроса
+        with self.assertNumQueries(2):
+            response = self.client.get("/api/tasks/")
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(response.json()["count"], 12)
+
+    def test_projects_list_endpoint_queries(self):
+        # 1 запрос COUNT (пагинация) + 1 запрос projects + 1 запрос prefetch tasks = 3 запроса
+        with self.assertNumQueries(3):
+            response = self.client.get("/api/projects/")
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(response.json()["count"], 3)
+
+
+class PaginationFilteringSortingTest(TestCase):
+    """Тестирование пагинации (?page=), фильтрации (?status=) и сортировки (?ordering=)."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user1 = User.objects.create_user(username="alice", email="alice@test.com")
+        self.user2 = User.objects.create_user(username="bob", email="bob@test.com")
+        self.project1 = Project.objects.create(name="Beta Project", owner=self.user1)
+        self.project2 = Project.objects.create(name="Gamma Project", owner=self.user2)
+
+        base_time = timezone.now()
+        self.task1 = Task.objects.create(
+            title="Task A",
+            project=self.project1,
+            assignee=self.user1,
+            status=TaskStatus.TODO,
+            priority=TaskPriority.LOW,
+            due_date=base_time + timedelta(days=1),
+        )
+        self.task2 = Task.objects.create(
+            title="Task B",
+            project=self.project1,
+            assignee=self.user2,
+            status=TaskStatus.IN_PROGRESS,
+            priority=TaskPriority.HIGH,
+            due_date=base_time + timedelta(days=3),
+        )
+        self.task3 = Task.objects.create(
+            title="Task C",
+            project=self.project2,
+            assignee=self.user1,
+            status=TaskStatus.DONE,
+            priority=TaskPriority.MEDIUM,
+            due_date=base_time + timedelta(days=2),
+        )
+
+    def test_pagination(self):
+        response = self.client.get("/api/tasks/?page=1&page_size=2")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertEqual(data["count"], 3)
+        self.assertEqual(len(data["results"]), 2)
+        self.assertIsNotNone(data["next"])
+        self.assertIsNone(data["previous"])
+
+        # Вторая страница
+        response_page2 = self.client.get("/api/tasks/?page=2&page_size=2")
+        self.assertEqual(response_page2.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response_page2.json()["results"]), 1)
+
+    def test_filter_by_status(self):
+        response = self.client.get("/api/tasks/?status=in_progress")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.json()["results"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["id"], self.task2.id)
+
+    def test_filter_by_priority(self):
+        response = self.client.get("/api/tasks/?priority=high")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.json()["results"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["id"], self.task2.id)
+
+    def test_filter_by_project_id(self):
+        response = self.client.get(f"/api/tasks/?project_id={self.project2.id}")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.json()["results"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["id"], self.task3.id)
+
+    def test_filter_by_assignee_id(self):
+        response = self.client.get(f"/api/tasks/?assignee_id={self.user2.id}")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.json()["results"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["id"], self.task2.id)
+
+    def test_sorting(self):
+        # Сортировка по возрастанию due_date (task1 < task3 < task2)
+        response = self.client.get("/api/tasks/?ordering=due_date")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [item["id"] for item in response.json()["results"]]
+        self.assertEqual(ids, [self.task1.id, self.task3.id, self.task2.id])
+
+        # Сортировка по убыванию due_date
+        response_desc = self.client.get("/api/tasks/?ordering=-due_date")
+        self.assertEqual(response_desc.status_code, status.HTTP_200_OK)
+        ids_desc = [item["id"] for item in response_desc.json()["results"]]
+        self.assertEqual(ids_desc, [self.task2.id, self.task3.id, self.task1.id])
+
+
+class ValidationAndRFC7807ErrorTest(TestCase):
+    """Тестирование валидации данных и формата ответов об ошибках RFC 7807."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="val_user", email="val@test.com")
+        self.project = Project.objects.create(name="Val Project", owner=self.user)
+
+    def test_validation_empty_task_title_rfc_7807(self):
+        payload = {
+            "title": "   ",
+            "project": self.project.id,
+        }
+        response = self.client.post("/api/tasks/", payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        data = response.json()
+        self.assertEqual(data["type"], "urn:problem-type:unprocessable-entity")
+        self.assertEqual(data["title"], "Unprocessable Entity")
+        self.assertEqual(data["status"], 422)
+        self.assertIn("detail", data)
+        self.assertEqual(data["instance"], "/api/tasks/")
+        self.assertIn("invalid_params", data)
+        self.assertIn("title", data["invalid_params"])
+
+    def test_validation_past_due_date_rfc_7807(self):
+        past_date = (timezone.now() - timedelta(days=2)).isoformat()
+        payload = {
+            "title": "Past Task",
+            "project": self.project.id,
+            "due_date": past_date,
+        }
+        response = self.client.post("/api/tasks/", payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        data = response.json()
+        self.assertEqual(data["status"], 422)
+        self.assertIn("due_date", data["invalid_params"])
+
+    def test_validation_invalid_choice_status_rfc_7807(self):
+        payload = {
+            "title": "Invalid Status Task",
+            "project": self.project.id,
+            "status": "not_a_valid_status",
+        }
+        response = self.client.post("/api/tasks/", payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        data = response.json()
+        self.assertEqual(data["status"], 422)
+        self.assertIn("status", data["invalid_params"])
+
+    def test_validation_empty_project_name_rfc_7807(self):
+        payload = {"name": "   ", "owner": self.user.id}
+        response = self.client.post("/api/projects/", payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        data = response.json()
+        self.assertEqual(data["type"], "urn:problem-type:unprocessable-entity")
+        self.assertEqual(data["status"], 422)
+        self.assertIn("name", data["invalid_params"])
+
+    def test_not_found_rfc_7807(self):
+        response = self.client.get("/api/tasks/999999/")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        data = response.json()
+        self.assertEqual(data["type"], "urn:problem-type:not-found")
+        self.assertEqual(data["title"], "Not Found")
+        self.assertEqual(data["status"], 404)
+        self.assertEqual(data["instance"], "/api/tasks/999999/")
+        self.assertIn("detail", data)
+
+    def test_method_not_allowed_rfc_7807(self):
+        # GET на /health разрешен, POST не разрешен
+        response = self.client.post("/api/health/")
+        self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        data = response.json()
+        self.assertEqual(data["type"], "urn:problem-type:method-not-allowed")
+        self.assertEqual(data["status"], 405)
+        self.assertIn("detail", data)

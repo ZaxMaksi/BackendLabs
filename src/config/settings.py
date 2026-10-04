@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "django_filters",
     "apps.tasks",
 ]
 
@@ -131,3 +132,14 @@ MAILERS = {
 }
 
 AUTH_USER_MODEL = "tasks.User"
+
+REST_FRAMEWORK = {
+    "DEFAULT_PAGINATION_CLASS": "apps.tasks.pagination.StandardResultsSetPagination",
+    "PAGE_SIZE": 10,
+    "DEFAULT_FILTER_BACKENDS": [
+        "django_filters.rest_framework.DjangoFilterBackend",
+        "rest_framework.filters.OrderingFilter",
+        "rest_framework.filters.SearchFilter",
+    ],
+    "EXCEPTION_HANDLER": "apps.tasks.exceptions.custom_exception_handler",
+}

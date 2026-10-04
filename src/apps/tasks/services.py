@@ -2,6 +2,7 @@ from typing import Optional
 
 from django.db import connection
 from django.db.models import QuerySet
+from django.utils import timezone
 
 from apps.tasks.models import Project, Task, TaskPriority, TaskStatus, User
 from apps.tasks.repositories import ProjectRepository, TaskRepository
@@ -21,6 +22,12 @@ class EntityNotFoundError(ServiceError):
 
 class ValidationError(ServiceError):
     """Исключение, выбрасываемое при ошибке валидации бизнес-логики."""
+
+    pass
+
+
+class BadRequestError(ServiceError):
+    """Исключение, выбрасываемое при некорректном синтаксисе или параметрах запроса."""
 
     pass
 
@@ -49,6 +56,8 @@ class ProjectService:
         clean_name = name.strip() if name else ""
         if not clean_name:
             raise ValidationError("Project name cannot be empty.")
+        if not owner:
+            raise ValidationError("Project owner is required.")
         return self.repository.create(
             name=clean_name, owner=owner, description=description
         )
@@ -81,13 +90,23 @@ class TaskService:
     def list_tasks(
         self,
         project_id: Optional[int] = None,
-        assignee: Optional[User] = None,
+        assignee: Optional[User | int] = None,
+        status: Optional[str] = None,
+        priority: Optional[str] = None,
     ) -> QuerySet[Task]:
+        qs = self.task_repo.get_all()
         if project_id:
-            return self.task_repo.get_by_project(project_id)
+            qs = qs.filter(project_id=project_id)
         if assignee:
-            return self.task_repo.get_by_assignee(assignee)
-        return self.task_repo.get_all()
+            if isinstance(assignee, User):
+                qs = qs.filter(assignee=assignee)
+            else:
+                qs = qs.filter(assignee_id=assignee)
+        if status:
+            qs = qs.filter(status=status)
+        if priority:
+            qs = qs.filter(priority=priority)
+        return qs
 
     def get_task(self, task_id: int) -> Task:
         task = self.task_repo.get_by_id(task_id)
@@ -122,6 +141,9 @@ class TaskService:
             raise ValidationError(
                 f"Invalid priority '{priority}'. Allowed values: {TaskPriority.values}"
             )
+
+        if due_date and due_date < timezone.now():
+            raise ValidationError("Due date cannot be in the past.")
 
         return self.task_repo.create(
             title=clean_title,
@@ -161,6 +183,21 @@ class TaskService:
             data["project"] = project
             del data["project_id"]
 
+        if "project" in data and isinstance(data["project"], int):
+            project = self.project_repo.get_by_id(data["project"])
+            if not project:
+                raise EntityNotFoundError(
+                    f"Project with ID {data['project']} not found."
+                )
+            data["project"] = project
+
+        if (
+            "due_date" in data
+            and data["due_date"]
+            and data["due_date"] < timezone.now()
+        ):
+            raise ValidationError("Due date cannot be in the past.")
+
         return self.task_repo.update(task, **data)
 
     def delete_task(self, task_id: int) -> None:
@@ -183,7 +220,6 @@ class HealthCheckService:
 
     @staticmethod
     def check_health() -> dict[str, str]:
-        # Проверяем доступность подключения к БД
         with connection.cursor() as cursor:
             cursor.execute("SELECT 1")
             cursor.fetchone()

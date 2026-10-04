@@ -1,6 +1,6 @@
 from typing import Optional
 
-from django.db.models import QuerySet
+from django.db.models import Prefetch, QuerySet
 
 from apps.tasks.models import Project, Task, TaskPriority, TaskStatus, User, UserRole
 
@@ -35,16 +35,35 @@ class UserRepository:
 
 
 class ProjectRepository:
-    """Репозиторий для изоляции direct ORM-запросов к сущности Project."""
+    """Репозиторий для изоляции direct ORM-запросов к сущности Project с оптимизацией N+1."""
 
     def get_all(self) -> QuerySet[Project]:
-        return Project.objects.all()
+        return (
+            Project.objects.select_related("owner")
+            .prefetch_related(
+                Prefetch("tasks", queryset=Task.objects.select_related("assignee"))
+            )
+            .all()
+        )
 
     def get_by_id(self, project_id: int) -> Optional[Project]:
-        return Project.objects.filter(id=project_id).first()
+        return (
+            Project.objects.select_related("owner")
+            .prefetch_related(
+                Prefetch("tasks", queryset=Task.objects.select_related("assignee"))
+            )
+            .filter(id=project_id)
+            .first()
+        )
 
     def get_by_owner(self, owner: User) -> QuerySet[Project]:
-        return Project.objects.filter(owner=owner)
+        return (
+            Project.objects.select_related("owner")
+            .prefetch_related(
+                Prefetch("tasks", queryset=Task.objects.select_related("assignee"))
+            )
+            .filter(owner=owner)
+        )
 
     def create(
         self, name: str, owner: User, description: Optional[str] = None
@@ -65,26 +84,36 @@ class ProjectRepository:
 
 
 class TaskRepository:
-    """Репозиторий для изоляции direct ORM-запросов к сущности Task."""
+    """Репозиторий для изоляции direct ORM-запросов к сущности Task с оптимизацией N+1."""
 
     def get_all(self) -> QuerySet[Task]:
-        return Task.objects.all()
+        return Task.objects.select_related(
+            "project", "project__owner", "assignee"
+        ).all()
 
     def get_by_id(self, task_id: int) -> Optional[Task]:
-        return Task.objects.filter(id=task_id).first()
+        return (
+            Task.objects.select_related("project", "project__owner", "assignee")
+            .filter(id=task_id)
+            .first()
+        )
 
     def get_by_project(self, project: Project | int) -> QuerySet[Task]:
+        qs = Task.objects.select_related("project", "project__owner", "assignee")
         if isinstance(project, Project):
-            return Task.objects.filter(project=project)
-        return Task.objects.filter(project_id=project)
+            return qs.filter(project=project)
+        return qs.filter(project_id=project)
 
     def get_by_assignee(self, assignee: User | int) -> QuerySet[Task]:
+        qs = Task.objects.select_related("project", "project__owner", "assignee")
         if isinstance(assignee, User):
-            return Task.objects.filter(assignee=assignee)
-        return Task.objects.filter(assignee_id=assignee)
+            return qs.filter(assignee=assignee)
+        return qs.filter(assignee_id=assignee)
 
     def get_by_status(self, status: str) -> QuerySet[Task]:
-        return Task.objects.filter(status=status)
+        return Task.objects.select_related(
+            "project", "project__owner", "assignee"
+        ).filter(status=status)
 
     def create(
         self,
