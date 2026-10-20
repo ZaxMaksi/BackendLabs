@@ -9,7 +9,13 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import exception_handler
 
-from apps.tasks.services import BadRequestError, EntityNotFoundError
+from apps.tasks.services import (
+    BadRequestError,
+    EntityNotFoundError,
+    ExternalServiceConnectionError,
+    ExternalServiceError,
+    ExternalServiceTimeoutError,
+)
 from apps.tasks.services import ValidationError as ServiceValidationError
 
 
@@ -60,6 +66,16 @@ def custom_exception_handler(
         status_code = status.HTTP_404_NOT_FOUND
         title = "Not Found"
         detail_msg = str(exc) or "Resource not found."
+
+    elif isinstance(exc, ExternalServiceTimeoutError):
+        status_code = status.HTTP_504_GATEWAY_TIMEOUT
+        title = "Gateway Timeout"
+        detail_msg = str(exc)
+
+    elif isinstance(exc, (ExternalServiceConnectionError, ExternalServiceError)):
+        status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        title = "Service Unavailable"
+        detail_msg = str(exc)
 
     elif isinstance(exc, BadRequestError) or isinstance(exc, drf_exceptions.ParseError):
         status_code = status.HTTP_400_BAD_REQUEST

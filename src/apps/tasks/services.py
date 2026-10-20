@@ -1,5 +1,6 @@
 import mimetypes
-from typing import Optional
+import time
+from typing import Any, Optional
 
 from django.conf import settings
 from django.db import connection
@@ -34,6 +35,30 @@ class ValidationError(ServiceError):
 
 class BadRequestError(ServiceError):
     """Виключення, що викидається при некоректному синтаксисі або параметрах запиту."""
+
+    pass
+
+
+class ExternalServiceError(ServiceError):
+    """Базове виключення взаємодії із зовнішнім REST-сервісом."""
+
+    pass
+
+
+class ExternalServiceTimeoutError(ExternalServiceError):
+    """Виключення при перевищенні таймауту запиту до зовнішнього сервісу."""
+
+    pass
+
+
+class ExternalServiceConnectionError(ExternalServiceError):
+    """Виключення при помилці підключення до зовнішнього сервісу."""
+
+    pass
+
+
+class BackgroundTaskNotFoundError(EntityNotFoundError):
+    """Виключення, коли фонове завдання не знайдено за ідентифікатором."""
 
     pass
 
@@ -324,3 +349,99 @@ class AttachmentService:
     def delete_attachment(self, attachment_id: int) -> None:
         attachment = self.get_attachment(attachment_id)
         self.attachment_repo.delete(attachment)
+
+
+class ProjectReportService:
+    """Сервіс формування аналітичного звіту за проєктом у фоновому режимі."""
+
+    def __init__(
+        self,
+        project_repo: Optional[ProjectRepository] = None,
+        task_repo: Optional[TaskRepository] = None,
+    ):
+        self.project_repo = project_repo or ProjectRepository()
+        self.task_repo = task_repo or TaskRepository()
+
+    def start_project_report_generation(self, project_id: int) -> str:
+        project = self.project_repo.get_by_id(project_id)
+        if not project:
+            raise EntityNotFoundError(f"Project with ID {project_id} not found.")
+
+        from apps.tasks.background import BackgroundTaskExecutor
+
+        executor = BackgroundTaskExecutor()
+        job_id = executor.submit_task(
+            "project_summary_report",
+            self._generate_report,
+            project_id=project_id,
+        )
+        return job_id
+
+    def _generate_report(self, project_id: int) -> dict[str, Any]:
+        project = self.project_repo.get_by_id(project_id)
+        if not project:
+            raise EntityNotFoundError(f"Project with ID {project_id} not found.")
+
+        # Опціональна симуляція тривалого опрацювання
+        delay = getattr(settings, "BACKGROUND_TASK_SIMULATE_DELAY", 0.0)
+        if delay > 0:
+            time.sleep(delay)
+
+        tasks = list(project.tasks.all())
+        total_tasks = len(tasks)
+        now = timezone.now()
+
+        tasks_by_status = {s.value: 0 for s in TaskStatus}
+        tasks_by_priority = {p.value: 0 for p in TaskPriority}
+        overdue_count = 0
+        upcoming_count = 0
+        total_attachments_count = 0
+        total_attachments_bytes = 0
+
+        for t in tasks:
+            tasks_by_status[t.status] = tasks_by_status.get(t.status, 0) + 1
+            tasks_by_priority[t.priority] = tasks_by_priority.get(t.priority, 0) + 1
+            if t.due_date:
+                if t.due_date < now and t.status != TaskStatus.DONE:
+                    overdue_count += 1
+                elif now <= t.due_date <= now + timezone.timedelta(days=7):
+                    upcoming_count += 1
+            # attachments
+            atts = list(t.attachments.all())
+            total_attachments_count += len(atts)
+            total_attachments_bytes += sum(a.file_size for a in atts)
+
+        completion_rate = (
+            round((tasks_by_status[TaskStatus.DONE.value] / total_tasks) * 100, 2)
+            if total_tasks > 0
+            else 0.0
+        )
+
+        return {
+            "project_id": project.id,
+            "project_name": project.name,
+            "owner": {
+                "id": project.owner_id,
+                "username": project.owner.username,
+            },
+            "total_tasks": total_tasks,
+            "completion_rate_percent": completion_rate,
+            "tasks_by_status": tasks_by_status,
+            "tasks_by_priority": tasks_by_priority,
+            "overdue_tasks": overdue_count,
+            "upcoming_deadlines_next_7_days": upcoming_count,
+            "total_attachments": total_attachments_count,
+            "total_attachments_bytes": total_attachments_bytes,
+            "generated_at": timezone.now().isoformat(),
+        }
+
+    def get_task_status(self, job_id: str) -> dict[str, Any]:
+        from apps.tasks.background import BackgroundTaskExecutor
+
+        executor = BackgroundTaskExecutor()
+        data = executor.get_task_status(job_id)
+        if not data:
+            raise BackgroundTaskNotFoundError(
+                f"Background task with ID '{job_id}' not found."
+            )
+        return data

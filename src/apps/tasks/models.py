@@ -58,6 +58,17 @@ class Task(models.Model):
     due_date = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["status", "due_date"], name="task_status_due_date_idx"
+            ),
+            models.Index(fields=["status"], name="task_status_idx"),
+            models.Index(fields=["due_date"], name="task_due_date_idx"),
+            models.Index(fields=["title"], name="task_title_idx"),
+        ]
+
     def __str__(self):
         return self.title
 

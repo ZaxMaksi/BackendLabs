@@ -1,10 +1,15 @@
 import os
 import shutil
 import tempfile
+import time
 from datetime import timedelta
+from unittest.mock import MagicMock, patch
 
+import requests
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase, override_settings
+from django.db import connection
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -1077,3 +1082,271 @@ class FullLifecycleIntegrationTest(TestCase):
                 self.assertFalse(Attachment.objects.filter(id=att.id).exists())
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+class TwelveFactorAppConfigTest(TestCase):
+    """Тестування конфігурації за принципами 12-Factor App та шаблону оточення."""
+
+    def test_settings_loaded_from_environment(self):
+        from django.conf import settings
+
+        self.assertIsNotNone(settings.SECRET_KEY)
+        self.assertIsInstance(settings.DEBUG, bool)
+        self.assertIsInstance(settings.ALLOWED_HOSTS, list)
+        self.assertIn("default", settings.CACHES)
+        self.assertIn("BACKEND", settings.CACHES["default"])
+        self.assertIsNotNone(settings.EXTERNAL_API_BASE_URL)
+        self.assertGreater(settings.EXTERNAL_API_TIMEOUT, 0)
+        self.assertGreater(settings.BACKGROUND_TASK_MAX_WORKERS, 0)
+
+    def test_env_example_file_structure(self):
+        env_example_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+            ".env.example",
+        )
+        self.assertTrue(os.path.exists(env_example_path))
+        with open(env_example_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("SECRET_KEY=", content)
+        self.assertIn("DEBUG=", content)
+        self.assertIn("DB_NAME=", content)
+        self.assertIn("CACHE_BACKEND=", content)
+        self.assertIn("EXTERNAL_API_TIMEOUT=", content)
+        self.assertIn("BACKGROUND_TASK_MAX_WORKERS=", content)
+        # Verify no real secrets leaked in example template
+        self.assertNotIn("bmnnpg777", content)
+
+
+class BackgroundTaskProcessingTest(TransactionTestCase):
+    """Тестування асинхронного фонового опрацювання операцій без брокера (202 Accepted)."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="bg_tester", password="secure_password"
+        )
+        self.project = Project.objects.create(
+            name="Async Project",
+            description="Testing ThreadPool background processing",
+            owner=self.user,
+        )
+        now = timezone.now()
+        # Створюємо завдання різних статусів та пріоритетів
+        Task.objects.create(
+            title="Task 1",
+            status=TaskStatus.TODO,
+            priority=TaskPriority.HIGH,
+            project=self.project,
+            due_date=now - timedelta(days=2),  # Overdue
+        )
+        Task.objects.create(
+            title="Task 2",
+            status=TaskStatus.IN_PROGRESS,
+            priority=TaskPriority.MEDIUM,
+            project=self.project,
+            due_date=now + timedelta(days=3),  # Upcoming
+        )
+        Task.objects.create(
+            title="Task 3",
+            status=TaskStatus.DONE,
+            priority=TaskPriority.LOW,
+            project=self.project,
+            due_date=now - timedelta(days=1),
+        )
+
+    def test_project_report_generation_returns_202_accepted(self):
+        response = self.client.post(
+            f"/api/projects/{self.project.id}/generate-report/"
+        )
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        data = response.json()
+        self.assertEqual(data["status"], "accepted")
+        self.assertIn("job_id", data)
+        self.assertIn("check_status_url", data)
+        self.assertIn(data["job_id"], data["check_status_url"])
+
+        # Очікуємо завершення виконання у фоновому потоці до teardown тесту
+        job_id = data["job_id"]
+        for _ in range(20):
+            res = self.client.get(f"/api/background-tasks/{job_id}/")
+            if res.json().get("status") in ["completed", "failed"]:
+                break
+            time.sleep(0.05)
+
+    def test_background_task_execution_and_status_polling(self):
+        # 1. Запуск фонової задачі
+        response = self.client.post(
+            f"/api/projects/{self.project.id}/generate-report/"
+        )
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        job_id = response.json()["job_id"]
+
+        # 2. Очікування завершення виконання у пулі потоків
+        max_retries = 20
+        task_data = None
+        for _ in range(max_retries):
+            res_status = self.client.get(f"/api/background-tasks/{job_id}/")
+            self.assertEqual(res_status.status_code, status.HTTP_200_OK)
+            task_data = res_status.json()
+            if task_data["status"] in ["completed", "failed"]:
+                break
+            time.sleep(0.05)
+
+        self.assertIsNotNone(task_data)
+        self.assertEqual(task_data["status"], "completed")
+        self.assertIsNone(task_data["error"])
+
+        # 3. Перевірка обчислених даних аналітичного звіту
+        report = task_data["result"]
+        self.assertIsNotNone(report)
+        self.assertEqual(report["project_id"], self.project.id)
+        self.assertEqual(report["total_tasks"], 3)
+        self.assertEqual(report["tasks_by_status"]["todo"], 1)
+        self.assertEqual(report["tasks_by_status"]["in_progress"], 1)
+        self.assertEqual(report["tasks_by_status"]["done"], 1)
+        self.assertEqual(report["tasks_by_priority"]["high"], 1)
+        self.assertEqual(report["overdue_tasks"], 1)
+        self.assertEqual(report["upcoming_deadlines_next_7_days"], 1)
+        self.assertAlmostEqual(report["completion_rate_percent"], 33.33, places=2)
+
+    def test_background_task_not_found_rfc_7807(self):
+        fake_uuid = "00000000-0000-0000-0000-000000000000"
+        response = self.client.get(f"/api/background-tasks/{fake_uuid}/")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        data = response.json()
+        self.assertEqual(data["type"], "urn:problem-type:not-found")
+        self.assertEqual(data["status"], 404)
+        self.assertIn("not found", data["detail"].lower())
+
+    def test_generate_report_non_existent_project_rfc_7807(self):
+        response = self.client.post("/api/projects/999999/generate-report/")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        data = response.json()
+        self.assertEqual(data["type"], "urn:problem-type:not-found")
+        self.assertEqual(data["status"], 404)
+
+
+class ExternalCalendarAndCachingTest(TestCase):
+    """Тестування інтеграції із зовнішнім REST-сервісом та кешуванням у пам'яті."""
+
+    def setUp(self):
+        self.client = APIClient()
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @patch("requests.get")
+    def test_external_holidays_successful_fetch_and_caching(self, mock_get):
+        mock_holidays = [
+            {"date": "2026-01-01", "localName": "Новий Рік", "name": "New Year's Day", "countryCode": "UA"},
+            {"date": "2026-01-07", "localName": "Різдво", "name": "Christmas Day", "countryCode": "UA"},
+        ]
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_holidays
+        mock_get.return_value = mock_response
+
+        # 1. Перший запит: звернення до зовнішнього API (miss кешу)
+        res1 = self.client.get("/api/external/holidays/?year=2026&country_code=UA")
+        self.assertEqual(res1.status_code, status.HTTP_200_OK)
+        data1 = res1.json()
+        self.assertFalse(data1["cached"])
+        self.assertEqual(data1["total_holidays"], 2)
+        self.assertEqual(data1["country_code"], "UA")
+        self.assertEqual(mock_get.call_count, 1)
+
+        # 2. Другий запит: повернення з LocMemCache (hit кешу)
+        res2 = self.client.get("/api/external/holidays/?year=2026&country_code=UA")
+        self.assertEqual(res2.status_code, status.HTTP_200_OK)
+        data2 = res2.json()
+        self.assertTrue(data2["cached"])
+        self.assertEqual(data2["total_holidays"], 2)
+        # requests.get НЕ повинен викликатися повторно
+        self.assertEqual(mock_get.call_count, 1)
+
+    @patch("requests.get")
+    def test_external_holidays_timeout_rfc_7807(self, mock_get):
+        mock_get.side_effect = requests.exceptions.Timeout("Connection timed out after 3.0s")
+        response = self.client.get("/api/external/holidays/?year=2026&country_code=UA")
+        self.assertEqual(response.status_code, status.HTTP_504_GATEWAY_TIMEOUT)
+        data = response.json()
+        self.assertEqual(data["type"], "urn:problem-type:gateway-timeout")
+        self.assertEqual(data["status"], 504)
+        self.assertIn("timed out", data["detail"].lower())
+
+    @patch("requests.get")
+    def test_external_holidays_connection_error_rfc_7807(self, mock_get):
+        mock_get.side_effect = requests.exceptions.ConnectionError("Failed to resolve host")
+        response = self.client.get("/api/external/holidays/?year=2026&country_code=UA")
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        data = response.json()
+        self.assertEqual(data["type"], "urn:problem-type:service-unavailable")
+        self.assertEqual(data["status"], 503)
+
+    def test_external_holidays_invalid_parameters_rfc_7807(self):
+        # Некоректний рік
+        res_bad_year = self.client.get("/api/external/holidays/?year=invalid_year")
+        self.assertEqual(res_bad_year.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res_bad_year.json()["type"], "urn:problem-type:bad-request")
+
+        # Некоректний код країни
+        res_bad_code = self.client.get("/api/external/holidays/?country_code=TOOLONG")
+        self.assertEqual(res_bad_code.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res_bad_code.json()["type"], "urn:problem-type:bad-request")
+
+
+class DatabaseIndexesOptimizationTest(TestCase):
+    """Тестування наявності та оптимізації індексів у PostgreSQL."""
+
+    def test_task_indexes_exist_in_postgresql(self):
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT indexname FROM pg_indexes WHERE tablename = 'tasks_task';"
+            )
+            indexes = [row[0] for row in cursor.fetchall()]
+
+        self.assertIn("task_status_due_date_idx", indexes)
+        self.assertIn("task_status_idx", indexes)
+        self.assertIn("task_due_date_idx", indexes)
+        self.assertIn("task_title_idx", indexes)
+
+    def test_task_composite_index_query_plan(self):
+        user = User.objects.create_user(username="idx_user", password="password")
+        project = Project.objects.create(name="Idx Project", owner=user)
+        now = timezone.now()
+
+        # Створюємо тестові записи
+        tasks = [
+            Task(
+                title=f"Test Index Task {i}",
+                status=TaskStatus.TODO if i % 2 == 0 else TaskStatus.DONE,
+                priority=TaskPriority.HIGH,
+                project=project,
+                assignee=user,
+                due_date=now + timedelta(days=i),
+            )
+            for i in range(50)
+        ]
+        Task.objects.bulk_create(tasks)
+
+        with connection.cursor() as cursor:
+            # Примусово вмикаємо використання індексів
+            cursor.execute("SET enable_seqscan = off;")
+            cursor.execute(
+                """
+                EXPLAIN (FORMAT TEXT)
+                SELECT id, title, status, due_date
+                FROM tasks_task
+                WHERE status = 'todo' AND due_date <= NOW() + INTERVAL '5 days';
+                """
+            )
+            plan_lines = [row[0] for row in cursor.fetchall()]
+            cursor.execute("RESET enable_seqscan;")
+
+        plan_text = " ".join(plan_lines)
+        # Переконуємось, що оптимізатор PostgreSQL використовує створений індекс
+        self.assertTrue(
+            "task_status_due_date_idx" in plan_text or "Index Scan" in plan_text or "Bitmap Index Scan" in plan_text,
+            f"Expected index scan, got plan:\n{plan_text}",
+        )

@@ -16,17 +16,24 @@ from rest_framework.exceptions import NotFound
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
+from apps.tasks.external import ExternalCalendarService
 from apps.tasks.filters import ProjectFilter, TaskFilter
 from apps.tasks.pagination import StandardResultsSetPagination
 from apps.tasks.serializers import (
     AttachmentSerializer,
+    BackgroundTaskAcceptedSerializer,
+    BackgroundTaskStatusSerializer,
+    ExternalHolidaysResponseSerializer,
     ProjectSerializer,
     TaskSerializer,
 )
 from apps.tasks.services import (
     AttachmentService,
+    BadRequestError,
     HealthCheckService,
+    ProjectReportService,
     ProjectService,
     TaskService,
 )
@@ -139,6 +146,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.project_service = ProjectService()
+        self.project_report_service = ProjectReportService()
 
     def get_queryset(self):
         return self.project_service.list_projects()
@@ -175,6 +183,40 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         self.project_service.delete_project(instance.id)
+
+    @extend_schema(
+        summary="Generate project report in background",
+        description=(
+            "Запустити асинхронну генерацію підсумкового аналітичного звіту за проєктом "
+            "у фоновому потоці без блокування клієнта (відповідь HTTP 202 Accepted)."
+        ),
+        tags=["Projects", "Background Tasks"],
+        responses={
+            202: OpenApiResponse(
+                response=BackgroundTaskAcceptedSerializer,
+                description="Завдання успішно прийнято до фонового виконання.",
+            ),
+            404: OpenApiResponse(description="Проєкт не знайдено (RFC 7807)"),
+        },
+    )
+    @action(detail=True, methods=["post"], url_path="generate-report")
+    def generate_report(self, request, pk=None):
+        project = self.get_object()
+        job_id = self.project_report_service.start_project_report_generation(
+            project.id
+        )
+        check_url = request.build_absolute_uri(f"/api/background-tasks/{job_id}/")
+        return Response(
+            {
+                "status": "accepted",
+                "message": (
+                    f"Project summary report generation started for project '{project.name}'."
+                ),
+                "job_id": job_id,
+                "check_status_url": check_url,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 
 @extend_schema_view(
@@ -453,3 +495,116 @@ class AttachmentViewSet(viewsets.ModelViewSet):
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
         response["Content-Length"] = str(instance.file_size)
         return response
+
+
+class BackgroundTaskDetailView(APIView):
+    """Ендпоінт моніторингу стану виконання фонового завдання."""
+
+    permission_classes = [AllowAny]
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.project_report_service = ProjectReportService()
+
+    @extend_schema(
+        summary="Get background task status",
+        description=(
+            "Отримати поточний стан фонового завдання за його job_id "
+            "(pending, running, completed, failed) та агрегований результат виконання."
+        ),
+        tags=["Background Tasks"],
+        parameters=[
+            OpenApiParameter(
+                name="job_id",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.PATH,
+                description="Унікальний UUID фонового завдання",
+            )
+        ],
+        responses={
+            200: OpenApiResponse(
+                response=BackgroundTaskStatusSerializer,
+                description="Інформація про стан виконання фонового завдання.",
+            ),
+            404: OpenApiResponse(description="Фонове завдання не знайдено (RFC 7807)."),
+        },
+    )
+    def get(self, request, job_id: str):
+        task_status = self.project_report_service.get_task_status(job_id)
+        serializer = BackgroundTaskStatusSerializer(task_status)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ExternalHolidaysView(APIView):
+    """Ендпоінт інтеграції із зовнішнім REST API виробничого календаря та свят."""
+
+    permission_classes = [AllowAny]
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.calendar_service = ExternalCalendarService()
+
+    @extend_schema(
+        summary="Get public holidays for year and country",
+        description=(
+            "Отримати перелік державних свят та неробочих днів для планування дедлайнів завдань. "
+            "Виконує стійкий запит до зовнішнього REST API з таймаутом та обов'язковим "
+            "кешуванням у пам'яті (LocMemCache)."
+        ),
+        tags=["External Services"],
+        parameters=[
+            OpenApiParameter(
+                name="year",
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                description="Рік (за замовчуванням поточний рік)",
+                required=False,
+            ),
+            OpenApiParameter(
+                name="country_code",
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                description="Дволітерний код країни ISO 3166-1 alpha-2 (за замовчуванням UA)",
+                required=False,
+            ),
+        ],
+        responses={
+            200: OpenApiResponse(
+                response=ExternalHolidaysResponseSerializer,
+                description="Список святкових днів успішно отримано.",
+            ),
+            400: OpenApiResponse(description="Некоректні параметри запиту (RFC 7807)."),
+            503: OpenApiResponse(description="Зовнішній сервіс недоступний (RFC 7807)."),
+            504: OpenApiResponse(
+                description="Перевищено таймаут очікування зовнішнього сервісу (RFC 7807)."
+            ),
+        },
+    )
+    def get(self, request):
+        year_raw = request.query_params.get("year")
+        country_code = request.query_params.get("country_code", "UA").strip().upper()
+
+        if year_raw:
+            try:
+                year = int(year_raw)
+                if year < 1900 or year > 2100:
+                    raise ValueError()
+            except ValueError:
+                raise BadRequestError(
+                    "Parameter 'year' must be an integer between 1900 and 2100."
+                )
+        else:
+            from django.utils import timezone
+
+            year = timezone.now().year
+
+        if not country_code or len(country_code) != 2:
+            raise BadRequestError(
+                "Parameter 'country_code' must be a 2-letter ISO country code (e.g. UA, US)."
+            )
+
+        data = self.calendar_service.get_public_holidays(
+            year=year, country_code=country_code
+        )
+        serializer = ExternalHolidaysResponseSerializer(data)
+        return Response(serializer.data, status=status.HTTP_200_OK)

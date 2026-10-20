@@ -22,10 +22,17 @@ load_dotenv(BASE_DIR.parent / ".env")
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
+# 12-Factor App Environment settings
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv("SECRET_KEY", "default-unsafe-secret-key")
-DEBUG = os.getenv("DEBUG", "True") == "True"
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
+DEBUG = os.getenv("DEBUG", "True").lower() in ("true", "1", "yes", "t")
+ALLOWED_HOSTS = [
+    h.strip()
+    for h in os.getenv("ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
+    if h.strip()
+]
 
 
 # Application definition
@@ -149,6 +156,28 @@ MAILERS = {
 }
 
 AUTH_USER_MODEL = "tasks.User"
+
+# In-Memory Caching (django.core.cache)
+CACHES = {
+    "default": {
+        "BACKEND": os.getenv(
+            "CACHE_BACKEND", "django.core.cache.backends.locmem.LocMemCache"
+        ),
+        "LOCATION": os.getenv("CACHE_LOCATION", "task_tracker_locmem_cache"),
+        "TIMEOUT": int(os.getenv("CACHE_DEFAULT_TIMEOUT", "300")),
+    }
+}
+
+# External REST API Integration Settings
+EXTERNAL_API_BASE_URL = os.getenv(
+    "EXTERNAL_API_BASE_URL", "https://date.nager.at/api/v3"
+)
+EXTERNAL_API_TIMEOUT = float(os.getenv("EXTERNAL_API_TIMEOUT", "3.0"))
+EXTERNAL_API_CACHE_TTL = int(os.getenv("EXTERNAL_API_CACHE_TTL", "300"))
+
+# Background Task Processing Settings (ThreadPoolExecutor)
+BACKGROUND_TASK_MAX_WORKERS = int(os.getenv("BACKGROUND_TASK_MAX_WORKERS", "4"))
+BACKGROUND_TASK_SIMULATE_DELAY = float(os.getenv("BACKGROUND_TASK_SIMULATE_DELAY", "0.0"))
 
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",

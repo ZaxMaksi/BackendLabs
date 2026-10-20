@@ -3,6 +3,8 @@ from rest_framework.routers import DefaultRouter
 
 from apps.tasks.views import (
     AttachmentViewSet,
+    BackgroundTaskDetailView,
+    ExternalHolidaysView,
     ProjectViewSet,
     TaskViewSet,
 )
@@ -17,4 +19,14 @@ router.register(r"attachments", AttachmentViewSet, basename="attachment")
 
 urlpatterns = [
     path("", include(router.urls)),
+    path(
+        "background-tasks/<str:job_id>/",
+        BackgroundTaskDetailView.as_view(),
+        name="background-task-detail",
+    ),
+    path(
+        "external/holidays/",
+        ExternalHolidaysView.as_view(),
+        name="external-holidays",
+    ),
 ]

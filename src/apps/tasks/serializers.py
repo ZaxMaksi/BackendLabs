@@ -228,3 +228,67 @@ class AttachmentSerializer(serializers.ModelSerializer):
         except Exception as exc:
             raise serializers.ValidationError(str(exc))
         return file
+
+
+class BackgroundTaskAcceptedSerializer(serializers.Serializer):
+    """Схема відповіді HTTP 202 Accepted для фонових операцій."""
+
+    status = serializers.CharField(
+        default="accepted",
+        help_text="Статус прийняття операції до виконання",
+    )
+    message = serializers.CharField(help_text="Опис операції")
+    job_id = serializers.CharField(help_text="Унікальний UUID фонового завдання")
+    check_status_url = serializers.CharField(
+        help_text="URL для перевірки стану фонового завдання"
+    )
+
+
+class BackgroundTaskStatusSerializer(serializers.Serializer):
+    """Схема перевірки стану виконання фонового завдання."""
+
+    job_id = serializers.CharField(help_text="Унікальний UUID фонового завдання")
+    job_type = serializers.CharField(help_text="Тип фонового процесу")
+    status = serializers.CharField(
+        help_text="Поточний стан: pending, running, completed, failed"
+    )
+    created_at = serializers.CharField(help_text="Час створення завдання (ISO 8601)")
+    started_at = serializers.CharField(
+        allow_null=True, required=False, help_text="Час початку виконання"
+    )
+    completed_at = serializers.CharField(
+        allow_null=True, required=False, help_text="Час завершення виконання"
+    )
+    result = serializers.DictField(
+        allow_null=True, required=False, help_text="Результат виконання операції"
+    )
+    error = serializers.CharField(
+        allow_null=True, required=False, help_text="Текст помилки у разі збою"
+    )
+
+
+class HolidayItemSerializer(serializers.Serializer):
+    """Схема елемента святкового дня."""
+
+    date = serializers.CharField(help_text="Дата свята у форматі YYYY-MM-DD")
+    localName = serializers.CharField(
+        required=False, allow_null=True, help_text="Локальна назва свята"
+    )
+    name = serializers.CharField(help_text="Міжнародна назва свята")
+    countryCode = serializers.CharField(
+        required=False, allow_null=True, help_text="Код країни (ISO 3166-1 alpha-2)"
+    )
+
+
+class ExternalHolidaysResponseSerializer(serializers.Serializer):
+    """Схема відповіді сервісу державних свят та виробничого календаря."""
+
+    country_code = serializers.CharField(help_text="Код країни (ISO 3166-1 alpha-2)")
+    year = serializers.IntegerField(help_text="Рік календаря")
+    cached = serializers.BooleanField(
+        help_text="Чи було отримано відповідь із пам'яті (LocMemCache)"
+    )
+    total_holidays = serializers.IntegerField(help_text="Загальна кількість свят")
+    holidays = HolidayItemSerializer(
+        many=True, help_text="Список святкових та неробочих днів"
+    )
