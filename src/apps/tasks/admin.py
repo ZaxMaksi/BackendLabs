@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
-from apps.tasks.models import Project, Task, User
+from apps.tasks.models import Attachment, Project, Task, User
 
 
 @admin.register(User)
@@ -36,3 +36,10 @@ class TaskAdmin(admin.ModelAdmin):
     )
     list_filter = ("status", "priority", "created_at")
     search_fields = ("title", "description", "project__name", "assignee__username")
+
+
+@admin.register(Attachment)
+class AttachmentAdmin(admin.ModelAdmin):
+    list_display = ("id", "file", "task", "file_size", "content_type", "uploaded_at")
+    list_filter = ("content_type", "uploaded_at")
+    search_fields = ("file", "task__title")

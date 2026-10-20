@@ -1,7 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
 
-from apps.tasks.models import Project, Task, TaskPriority, TaskStatus, User
+from apps.tasks.models import Attachment, Project, Task, TaskPriority, TaskStatus, User
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -177,3 +177,54 @@ class TaskSerializer(serializers.ModelSerializer):
         if value and value < timezone.now():
             raise serializers.ValidationError("Due date cannot be in the past.")
         return value
+
+
+class AttachmentSerializer(serializers.ModelSerializer):
+    """Серіалізатор для моделі Attachment з валідацією файлу та метаданих."""
+
+    task = serializers.PrimaryKeyRelatedField(
+        queryset=Task.objects.all(), required=False
+    )
+    task_id = serializers.PrimaryKeyRelatedField(
+        queryset=Task.objects.all(),
+        source="task",
+        write_only=True,
+        required=False,
+    )
+    file_size = serializers.IntegerField(read_only=True)
+    content_type = serializers.CharField(read_only=True)
+    uploaded_at = serializers.DateTimeField(read_only=True)
+
+    class Meta:
+        model = Attachment
+        fields = [
+            "id",
+            "task",
+            "task_id",
+            "file",
+            "file_size",
+            "content_type",
+            "uploaded_at",
+        ]
+        read_only_fields = ["id", "file_size", "content_type", "uploaded_at"]
+
+    def to_internal_value(self, data):
+        if hasattr(data, "dict"):
+            data = data.dict()
+        elif isinstance(data, dict):
+            data = data.copy()
+        if "task" in data and "task_id" not in data:
+            data["task_id"] = data.pop("task")
+        return super().to_internal_value(data)
+
+    def validate_file(self, file):
+        if not file:
+            raise serializers.ValidationError("File is required.")
+        from apps.tasks.services import AttachmentService
+
+        service = AttachmentService()
+        try:
+            service.validate_file(file)
+        except Exception as exc:
+            raise serializers.ValidationError(str(exc))
+        return file

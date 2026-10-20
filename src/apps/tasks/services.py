@@ -1,11 +1,17 @@
+import mimetypes
 from typing import Optional
 
+from django.conf import settings
 from django.db import connection
 from django.db.models import QuerySet
 from django.utils import timezone
 
-from apps.tasks.models import Project, Task, TaskPriority, TaskStatus, User
-from apps.tasks.repositories import ProjectRepository, TaskRepository
+from apps.tasks.models import Attachment, Project, Task, TaskPriority, TaskStatus, User
+from apps.tasks.repositories import (
+    AttachmentRepository,
+    ProjectRepository,
+    TaskRepository,
+)
 
 
 class ServiceError(Exception):
@@ -224,3 +230,97 @@ class HealthCheckService:
             cursor.execute("SELECT 1")
             cursor.fetchone()
         return {"status": "ok"}
+
+
+class AttachmentService:
+    """Сервісний шар для бізнес-логіки файлів-вкладень."""
+
+    def __init__(
+        self,
+        attachment_repository: Optional[AttachmentRepository] = None,
+        task_repository: Optional[TaskRepository] = None,
+    ):
+        self.attachment_repo = attachment_repository or AttachmentRepository()
+        self.task_repo = task_repository or TaskRepository()
+
+    def validate_file(self, file) -> None:
+        if not file:
+            raise ValidationError("No file provided.")
+
+        max_size = getattr(settings, "MAX_ATTACHMENT_SIZE_BYTES", 10 * 1024 * 1024)
+        if file.size > max_size:
+            max_mb = max_size // (1024 * 1024)
+            raise ValidationError(
+                f"File size exceeds limit of {max_mb} MB (current size: {file.size} bytes)."
+            )
+
+        if file.size == 0:
+            raise ValidationError("Uploaded file cannot be empty.")
+
+        allowed_exts = getattr(
+            settings,
+            "ALLOWED_ATTACHMENT_EXTENSIONS",
+            ["pdf", "png", "jpg", "jpeg", "docx", "txt"],
+        )
+        file_name = getattr(file, "name", "")
+        ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+        if ext not in allowed_exts:
+            raise ValidationError(
+                f"File extension '.{ext}' is not allowed. Allowed extensions: {', '.join(allowed_exts)}."
+            )
+
+        allowed_mimes = getattr(
+            settings,
+            "ALLOWED_ATTACHMENT_MIME_TYPES",
+            [
+                "application/pdf",
+                "image/png",
+                "image/jpeg",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "text/plain",
+            ],
+        )
+        content_type = getattr(file, "content_type", "")
+        if not content_type or content_type == "application/octet-stream":
+            guessed, _ = mimetypes.guess_type(file_name)
+            if guessed:
+                content_type = guessed
+
+        if content_type not in allowed_mimes:
+            raise ValidationError(
+                f"MIME type '{content_type}' is not allowed. Allowed types: {', '.join(allowed_mimes)}."
+            )
+
+    def list_attachments(self, task_id: Optional[int] = None) -> QuerySet[Attachment]:
+        if task_id:
+            return self.attachment_repo.get_by_task(task_id)
+        return self.attachment_repo.get_all()
+
+    def get_attachment(self, attachment_id: int) -> Attachment:
+        attachment = self.attachment_repo.get_by_id(attachment_id)
+        if not attachment:
+            raise EntityNotFoundError(f"Attachment with ID {attachment_id} not found.")
+        return attachment
+
+    def create_attachment(self, task_id: int, file) -> Attachment:
+        task = self.task_repo.get_by_id(task_id)
+        if not task:
+            raise EntityNotFoundError(f"Task with ID {task_id} not found.")
+
+        self.validate_file(file)
+
+        content_type = getattr(file, "content_type", "")
+        if not content_type or content_type == "application/octet-stream":
+            guessed, _ = mimetypes.guess_type(getattr(file, "name", ""))
+            content_type = guessed or "application/octet-stream"
+
+        return self.attachment_repo.create(
+            task=task,
+            file=file,
+            file_size=file.size,
+            content_type=content_type,
+        )
+
+    def delete_attachment(self, attachment_id: int) -> None:
+        attachment = self.get_attachment(attachment_id)
+        self.attachment_repo.delete(attachment)

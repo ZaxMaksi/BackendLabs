@@ -2,7 +2,15 @@ from typing import Optional
 
 from django.db.models import Prefetch, QuerySet
 
-from apps.tasks.models import Project, Task, TaskPriority, TaskStatus, User, UserRole
+from apps.tasks.models import (
+    Attachment,
+    Project,
+    Task,
+    TaskPriority,
+    TaskStatus,
+    User,
+    UserRole,
+)
 
 
 class UserRepository:
@@ -146,3 +154,40 @@ class TaskRepository:
 
     def exists_by_id(self, task_id: int) -> bool:
         return Task.objects.filter(id=task_id).exists()
+
+
+class AttachmentRepository:
+    """Репозиторій для ізоляції direct ORM-запитів до сутності Attachment."""
+
+    def get_all(self) -> QuerySet[Attachment]:
+        return Attachment.objects.select_related("task").all()
+
+    def get_by_id(self, attachment_id: int) -> Optional[Attachment]:
+        return (
+            Attachment.objects.select_related("task").filter(id=attachment_id).first()
+        )
+
+    def get_by_task(self, task_id: int) -> QuerySet[Attachment]:
+        return Attachment.objects.select_related("task").filter(task_id=task_id)
+
+    def create(
+        self,
+        task: Task,
+        file,
+        file_size: int,
+        content_type: str,
+    ) -> Attachment:
+        return Attachment.objects.create(
+            task=task,
+            file=file,
+            file_size=file_size,
+            content_type=content_type,
+        )
+
+    def delete(self, attachment: Attachment) -> None:
+        if attachment.file:
+            attachment.file.delete(save=False)
+        attachment.delete()
+
+    def exists_by_id(self, attachment_id: int) -> bool:
+        return Attachment.objects.filter(id=attachment_id).exists()

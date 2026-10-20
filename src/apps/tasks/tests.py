@@ -1,13 +1,31 @@
+import os
+import shutil
+import tempfile
 from datetime import timedelta
 
-from django.test import TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from apps.tasks.models import Project, Task, TaskPriority, TaskStatus, User, UserRole
-from apps.tasks.repositories import ProjectRepository, TaskRepository, UserRepository
+from apps.tasks.models import (
+    Attachment,
+    Project,
+    Task,
+    TaskPriority,
+    TaskStatus,
+    User,
+    UserRole,
+)
+from apps.tasks.repositories import (
+    AttachmentRepository,
+    ProjectRepository,
+    TaskRepository,
+    UserRepository,
+)
 from apps.tasks.services import (
+    AttachmentService,
     EntityNotFoundError,
     HealthCheckService,
     ProjectService,
@@ -114,6 +132,36 @@ class ModelsAndRepositoriesTest(TestCase):
         self.task_repo.delete(task)
         self.assertIsNone(self.task_repo.get_by_id(task.id))
 
+    def test_attachment_repository_crud(self):
+        project = self.project_repo.create(name="Attach Repo Project", owner=self.user)
+        task = self.task_repo.create(title="Attach Repo Task", project=project)
+        temp_media = tempfile.mkdtemp()
+        try:
+            with override_settings(MEDIA_ROOT=temp_media):
+                att_repo = AttachmentRepository()
+                test_file = SimpleUploadedFile(
+                    "readme.txt", b"Test file content", content_type="text/plain"
+                )
+                att = att_repo.create(
+                    task=task,
+                    file=test_file,
+                    file_size=17,
+                    content_type="text/plain",
+                )
+                self.assertEqual(att.task, task)
+                self.assertEqual(att.file_size, 17)
+                self.assertEqual(att.content_type, "text/plain")
+                self.assertTrue(att_repo.exists_by_id(att.id))
+                self.assertEqual(att_repo.get_by_task(task.id).count(), 1)
+                self.assertIsNotNone(att_repo.get_by_id(att.id))
+
+                # Delete
+                att_repo.delete(att)
+                self.assertFalse(att_repo.exists_by_id(att.id))
+                self.assertIsNone(att_repo.get_by_id(att.id))
+        finally:
+            shutil.rmtree(temp_media, ignore_errors=True)
+
 
 class ServicesTest(TestCase):
     def setUp(self):
@@ -192,6 +240,32 @@ class ServicesTest(TestCase):
         # Призначення виконавця
         assigned_task = self.task_service.assign_task(task.id, None)
         self.assertIsNone(assigned_task.assignee)
+
+    def test_attachment_service_validation(self):
+        att_service = AttachmentService()
+
+        # Помилка: відсутній файл
+        with self.assertRaises(ValidationError):
+            att_service.validate_file(None)
+
+        # Помилка: порожній файл
+        empty_file = SimpleUploadedFile("empty.txt", b"", content_type="text/plain")
+        with self.assertRaises(ValidationError):
+            att_service.validate_file(empty_file)
+
+        # Помилка: недозволене розширення
+        bad_ext = SimpleUploadedFile(
+            "script.sh", b"#!/bin/bash", content_type="text/plain"
+        )
+        with self.assertRaises(ValidationError):
+            att_service.validate_file(bad_ext)
+
+        # Помилка: недозволений MIME тип
+        bad_mime = SimpleUploadedFile(
+            "file.txt", b"hello", content_type="application/x-sh"
+        )
+        with self.assertRaises(ValidationError):
+            att_service.validate_file(bad_mime)
 
 
 class ProjectAPITestCase(TestCase):
@@ -589,3 +663,417 @@ class ValidationAndRFC7807ErrorTest(TestCase):
         self.assertEqual(data["type"], "urn:problem-type:method-not-allowed")
         self.assertEqual(data["status"], 405)
         self.assertIn("detail", data)
+
+
+class OpenAPIDocumentationTest(TestCase):
+    """Інтеграційні тести для OpenAPI v3 специфікації та Swagger UI / Redoc."""
+
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_openapi_schema_yaml(self):
+        response = self.client.get("/api/schema/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("openapi: 3.0", response.content.decode("utf-8"))
+        self.assertIn("Task Tracker API", response.content.decode("utf-8"))
+
+    def test_openapi_schema_json(self):
+        response = self.client.get("/api/schema/?format=json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()
+        self.assertIn("openapi", data)
+        self.assertIn("info", data)
+        self.assertEqual(data["info"]["title"], "Task Tracker API")
+        self.assertIn("paths", data)
+        # Перевірка наявності ключових шляхів
+        self.assertIn("/api/projects/", data["paths"])
+        self.assertIn("/api/tasks/", data["paths"])
+        self.assertIn("/api/attachments/", data["paths"])
+        self.assertIn("/api/health/", data["paths"])
+
+    def test_swagger_ui_endpoint(self):
+        response = self.client.get("/api/schema/swagger-ui/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("swagger-ui", response.content.decode("utf-8").lower())
+
+    def test_redoc_endpoint(self):
+        response = self.client.get("/api/schema/redoc/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("redoc", response.content.decode("utf-8").lower())
+
+
+class AttachmentAPITestCase(TestCase):
+    """Інтеграційні тести завантаження, видачі та валідації файлів-вкладень."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.temp_dir = tempfile.mkdtemp()
+        self.settings_override = override_settings(MEDIA_ROOT=self.temp_dir)
+        self.settings_override.enable()
+
+        self.user = User.objects.create_user(
+            username="attach_user", email="attach@test.com"
+        )
+        self.project = Project.objects.create(name="Attach Project", owner=self.user)
+        self.task1 = Task.objects.create(
+            title="Attachment Task 1",
+            project=self.project,
+            assignee=self.user,
+        )
+        self.task2 = Task.objects.create(
+            title="Attachment Task 2",
+            project=self.project,
+            assignee=self.user,
+        )
+
+    def tearDown(self):
+        self.settings_override.disable()
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_upload_valid_pdf_attachment(self):
+        # 1. Запит: завантаження валідного PDF
+        pdf_bytes = b"%PDF-1.4 test file content for document"
+        uploaded_file = SimpleUploadedFile(
+            "document.pdf", pdf_bytes, content_type="application/pdf"
+        )
+        response = self.client.post(
+            "/api/attachments/",
+            {"task": self.task1.id, "file": uploaded_file},
+            format="multipart",
+        )
+
+        # 2. Відповідь: 201 Created та структура
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
+        attachment_id = data["id"]
+        self.assertEqual(data["task"], self.task1.id)
+        self.assertEqual(data["file_size"], len(pdf_bytes))
+        self.assertEqual(data["content_type"], "application/pdf")
+        self.assertIn("uploaded_at", data)
+        self.assertIn("document", data["file"])
+
+        # 3. Стан БД: пряма перевірка запису в базі даних
+        att_db = Attachment.objects.filter(id=attachment_id).first()
+        self.assertIsNotNone(att_db)
+        self.assertEqual(att_db.task_id, self.task1.id)
+        self.assertEqual(att_db.file_size, len(pdf_bytes))
+        self.assertEqual(att_db.content_type, "application/pdf")
+        self.assertTrue(os.path.exists(att_db.file.path))
+
+    def test_upload_valid_png_attachment(self):
+        png_bytes = b"\x89PNG\r\n\x1a\nsamplepngcontent"
+        uploaded_file = SimpleUploadedFile(
+            "screenshot.png", png_bytes, content_type="image/png"
+        )
+        response = self.client.post(
+            "/api/attachments/",
+            {"task_id": self.task1.id, "file": uploaded_file},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
+        self.assertEqual(data["content_type"], "image/png")
+
+        # Перевірка в БД
+        self.assertTrue(Attachment.objects.filter(id=data["id"]).exists())
+
+    def test_upload_attachment_via_task_nested_endpoint(self):
+        # Завантаження безпосередньо через ендпоінт задачі /api/tasks/{task_id}/attachments/
+        txt_bytes = b"Text file attachment content"
+        uploaded_file = SimpleUploadedFile(
+            "notes.txt", txt_bytes, content_type="text/plain"
+        )
+        response = self.client.post(
+            f"/api/tasks/{self.task1.id}/attachments/",
+            {"file": uploaded_file},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
+        self.assertEqual(data["task"], self.task1.id)
+        self.assertEqual(data["file_size"], len(txt_bytes))
+
+        # Перевірка в БД
+        att_db = Attachment.objects.get(id=data["id"])
+        self.assertEqual(att_db.task_id, self.task1.id)
+
+    def test_list_and_filter_attachments(self):
+        # Додаємо 2 вкладення до task1 і 1 до task2
+        f1 = SimpleUploadedFile("doc1.pdf", b"%PDF-1", content_type="application/pdf")
+        f2 = SimpleUploadedFile("doc2.txt", b"notes", content_type="text/plain")
+        f3 = SimpleUploadedFile("doc3.png", b"\x89PNG", content_type="image/png")
+
+        self.client.post(
+            "/api/attachments/", {"task": self.task1.id, "file": f1}, format="multipart"
+        )
+        self.client.post(
+            "/api/attachments/", {"task": self.task1.id, "file": f2}, format="multipart"
+        )
+        self.client.post(
+            "/api/attachments/", {"task": self.task2.id, "file": f3}, format="multipart"
+        )
+
+        # 1. Запит всіх вкладень
+        res_all = self.client.get("/api/attachments/")
+        self.assertEqual(res_all.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_all.json()["count"], 3)
+
+        # 2. Фільтрація за task_id через query-параметр
+        res_task1 = self.client.get(f"/api/attachments/?task_id={self.task1.id}")
+        self.assertEqual(res_task1.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_task1.json()["count"], 2)
+
+        # 3. Отримання списку через nested-action задачі
+        res_nested = self.client.get(f"/api/tasks/{self.task1.id}/attachments/")
+        self.assertEqual(res_nested.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_nested.json()), 2)
+
+    def test_download_attachment(self):
+        content = b"Binary attachment payload to download"
+        uploaded_file = SimpleUploadedFile(
+            "manual.txt", content, content_type="text/plain"
+        )
+        res_upload = self.client.post(
+            "/api/attachments/",
+            {"task": self.task1.id, "file": uploaded_file},
+            format="multipart",
+        )
+        att_id = res_upload.json()["id"]
+
+        # Скачування файлу
+        res_download = self.client.get(f"/api/attachments/{att_id}/download/")
+        self.assertEqual(res_download.status_code, status.HTTP_200_OK)
+        self.assertIn(
+            "attachment; filename=", res_download.headers.get("Content-Disposition", "")
+        )
+        self.assertIn("manual.txt", res_download.headers.get("Content-Disposition", ""))
+        self.assertEqual(res_download.headers.get("Content-Type"), "text/plain")
+        self.assertEqual(b"".join(res_download.streaming_content), content)
+
+    def test_delete_attachment_full_lifecycle(self):
+        uploaded_file = SimpleUploadedFile(
+            "to_delete.txt", b"Delete me", content_type="text/plain"
+        )
+        res_upload = self.client.post(
+            "/api/attachments/",
+            {"task": self.task1.id, "file": uploaded_file},
+            format="multipart",
+        )
+        att_id = res_upload.json()["id"]
+        att_db = Attachment.objects.get(id=att_id)
+        file_path = att_db.file.path
+        self.assertTrue(os.path.exists(file_path))
+
+        # 1. Запит на видалення (DELETE /api/attachments/{id}/)
+        res_delete = self.client.delete(f"/api/attachments/{att_id}/")
+        self.assertEqual(res_delete.status_code, status.HTTP_204_NO_CONTENT)
+
+        # 2. Перевірка БД: запис видалено
+        self.assertFalse(Attachment.objects.filter(id=att_id).exists())
+
+        # 3. Перевірка 404 при повторному зверненні
+        res_get = self.client.get(f"/api/attachments/{att_id}/")
+        self.assertEqual(res_get.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_upload_file_exceeding_max_size_rfc_7807(self):
+        # Ліміт 10 МБ, створюємо файл 10 МБ + 1024 байти
+        large_bytes = b"0" * (10 * 1024 * 1024 + 1024)
+        large_file = SimpleUploadedFile(
+            "huge.pdf", large_bytes, content_type="application/pdf"
+        )
+        response = self.client.post(
+            "/api/attachments/",
+            {"task": self.task1.id, "file": large_file},
+            format="multipart",
+        )
+
+        # Перевірка RFC 7807 помилки
+        self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        data = response.json()
+        self.assertEqual(data["type"], "urn:problem-type:unprocessable-entity")
+        self.assertEqual(data["status"], 422)
+        self.assertIn("exceeds limit", data["detail"])
+
+        # Перевірка стану БД: жодного вкладення не створено
+        self.assertEqual(Attachment.objects.count(), 0)
+
+    def test_upload_file_invalid_extension_rfc_7807(self):
+        bad_file = SimpleUploadedFile(
+            "virus.exe", b"MZexecutablebytes", content_type="application/octet-stream"
+        )
+        response = self.client.post(
+            "/api/attachments/",
+            {"task": self.task1.id, "file": bad_file},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        data = response.json()
+        self.assertEqual(data["status"], 422)
+        self.assertIn("extension", data["detail"].lower())
+        self.assertEqual(Attachment.objects.count(), 0)
+
+    def test_upload_file_invalid_mime_type_rfc_7807(self):
+        bad_file = SimpleUploadedFile(
+            "script.txt", b"#!/bin/bash\nrm -rf /", content_type="application/x-sh"
+        )
+        response = self.client.post(
+            "/api/attachments/",
+            {"task": self.task1.id, "file": bad_file},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        data = response.json()
+        self.assertEqual(data["status"], 422)
+        self.assertIn("mime type", data["detail"].lower())
+        self.assertEqual(Attachment.objects.count(), 0)
+
+    def test_upload_empty_file_rfc_7807(self):
+        empty_file = SimpleUploadedFile(
+            "empty.pdf", b"", content_type="application/pdf"
+        )
+        response = self.client.post(
+            "/api/attachments/",
+            {"task": self.task1.id, "file": empty_file},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        data = response.json()
+        self.assertEqual(data["status"], 422)
+        self.assertEqual(Attachment.objects.count(), 0)
+
+
+class FullLifecycleIntegrationTest(TestCase):
+    """
+    Інтеграційні тести повного циклу ключових сценаріїв:
+    Створення ресурсу → Перевірка коду відповіді → Перевірка змін безпосередньо у БД (ланцюжок: запит → відповідь → стан БД).
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="lifecycle_user",
+            email="lifecycle@test.com",
+            role=UserRole.PROJECT_MANAGER,
+        )
+
+    def test_project_lifecycle_chain(self):
+        # 1. Запит на створення (POST)
+        payload = {
+            "name": "Integration Project",
+            "description": "Integration testing project",
+            "owner": self.user.id,
+        }
+        res_post = self.client.post("/api/projects/", payload, format="json")
+
+        # 2. Перевірка відповіді: 201 Created
+        self.assertEqual(res_post.status_code, status.HTTP_201_CREATED)
+        proj_id = res_post.json()["id"]
+
+        # 3. Перевірка стану БД безпосередньо через Django ORM
+        proj_db = Project.objects.filter(id=proj_id).first()
+        self.assertIsNotNone(proj_db)
+        self.assertEqual(proj_db.name, "Integration Project")
+        self.assertEqual(proj_db.owner_id, self.user.id)
+
+        # 4. Запит на оновлення (PATCH)
+        res_patch = self.client.patch(
+            f"/api/projects/{proj_id}/",
+            {"name": "Integration Project Updated"},
+            format="json",
+        )
+        self.assertEqual(res_patch.status_code, status.HTTP_200_OK)
+
+        # 5. Перевірка змін безпосередньо у БД
+        proj_db.refresh_from_db()
+        self.assertEqual(proj_db.name, "Integration Project Updated")
+
+        # 6. Запит на видалення (DELETE)
+        res_del = self.client.delete(f"/api/projects/{proj_id}/")
+        self.assertEqual(res_del.status_code, status.HTTP_204_NO_CONTENT)
+
+        # 7. Перевірка видалення у БД
+        self.assertFalse(Project.objects.filter(id=proj_id).exists())
+
+    def test_task_lifecycle_chain(self):
+        project = Project.objects.create(name="Task Lifecycle Proj", owner=self.user)
+        due = timezone.now() + timedelta(days=10)
+
+        # 1. Запит на створення завдання (POST)
+        task_payload = {
+            "title": "Build Integration Tests",
+            "description": "Cover stage 3 requirements",
+            "project": project.id,
+            "assignee": self.user.id,
+            "status": "todo",
+            "priority": "high",
+            "due_date": due.isoformat(),
+        }
+        res_post = self.client.post("/api/tasks/", task_payload, format="json")
+
+        # 2. Перевірка коду відповіді: 201 Created
+        self.assertEqual(res_post.status_code, status.HTTP_201_CREATED)
+        task_id = res_post.json()["id"]
+
+        # 3. Перевірка стану безпосередньо у БД
+        task_db = Task.objects.filter(id=task_id).first()
+        self.assertIsNotNone(task_db)
+        self.assertEqual(task_db.title, "Build Integration Tests")
+        self.assertEqual(task_db.status, TaskStatus.TODO)
+        self.assertEqual(task_db.priority, TaskPriority.HIGH)
+        self.assertEqual(task_db.project_id, project.id)
+        self.assertEqual(task_db.assignee_id, self.user.id)
+
+        # 4. Запит на оновлення статусу (PATCH)
+        res_patch = self.client.patch(
+            f"/api/tasks/{task_id}/", {"status": "in_progress"}, format="json"
+        )
+        self.assertEqual(res_patch.status_code, status.HTTP_200_OK)
+
+        # 5. Перевірка оновленого стану у БД
+        task_db.refresh_from_db()
+        self.assertEqual(task_db.status, TaskStatus.IN_PROGRESS)
+
+        # 6. Запит на завершення (PATCH done)
+        res_done = self.client.patch(
+            f"/api/tasks/{task_id}/", {"status": "done"}, format="json"
+        )
+        self.assertEqual(res_done.status_code, status.HTTP_200_OK)
+        task_db.refresh_from_db()
+        self.assertEqual(task_db.status, TaskStatus.DONE)
+
+        # 7. Запит на видалення (DELETE)
+        res_del = self.client.delete(f"/api/tasks/{task_id}/")
+        self.assertEqual(res_del.status_code, status.HTTP_204_NO_CONTENT)
+
+        # 8. Перевірка у БД
+        self.assertFalse(Task.objects.filter(id=task_id).exists())
+
+    def test_cascade_delete_chain(self):
+        # Перевірка каскадного видалення Проєкт → Завдання → Вкладення у БД
+        temp_dir = tempfile.mkdtemp()
+        try:
+            with override_settings(MEDIA_ROOT=temp_dir):
+                proj = Project.objects.create(name="Cascade Proj", owner=self.user)
+                t1 = Task.objects.create(title="Cascade Task", project=proj)
+                f = SimpleUploadedFile(
+                    "casc.txt", b"cascade", content_type="text/plain"
+                )
+                att = Attachment.objects.create(
+                    task=t1, file=f, file_size=7, content_type="text/plain"
+                )
+
+                # Переконуємось, що всі сутності створені у БД
+                self.assertTrue(Project.objects.filter(id=proj.id).exists())
+                self.assertTrue(Task.objects.filter(id=t1.id).exists())
+                self.assertTrue(Attachment.objects.filter(id=att.id).exists())
+
+                # Видаляємо проєкт через API
+                res = self.client.delete(f"/api/projects/{proj.id}/")
+                self.assertEqual(res.status_code, status.HTTP_204_NO_CONTENT)
+
+                # Перевіряємо каскадне видалення у БД
+                self.assertFalse(Project.objects.filter(id=proj.id).exists())
+                self.assertFalse(Task.objects.filter(id=t1.id).exists())
+                self.assertFalse(Attachment.objects.filter(id=att.id).exists())
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
